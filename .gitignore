@@ -1,0 +1,26 @@
+# Ignore everything by default (whitelist approach for dotfiles)
+*
+
+# Shell config
+!.zshrc
+!.zshenv
+!.aliases.zsh
+
+# Git config
+!.gitconfig
+!.gitignore
+
+# Config directory structure
+!.config/
+!.config/nvim/
+!.config/nvim/**
+!.config/tmux/
+!.config/tmux/**
+!.config/starship.toml
+
+# Sensitive - never track
+.config/gh/
+**/hosts.json
+**/*.pem
+**/*.key
+.env*
