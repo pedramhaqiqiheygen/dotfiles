@@ -30,7 +30,9 @@ wt() {
         return 1
     fi
 
-    local repo_name=$(basename "$repo_root")
+    # Get the main worktree (original repo) path to handle being called from within a worktree
+    local main_wt=$(git worktree list --porcelain | grep '^worktree ' | head -1 | sed 's/^worktree //')
+    local repo_name=$(basename "$main_wt")
     local default_branch=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@')
     default_branch="${default_branch:-master}"
 
@@ -64,7 +66,9 @@ wtrm() {
         return 1
     fi
 
-    local repo_name=$(basename "$repo_root")
+    # Get the main worktree (original repo) path to handle being called from within a worktree
+    local main_wt=$(git worktree list --porcelain | grep '^worktree ' | head -1 | sed 's/^worktree //')
+    local repo_name=$(basename "$main_wt")
     local dir_name="${branch//\//-}"
     local wt_path="$HOME/.cursor/worktrees/${repo_name}/${dir_name}"
 
