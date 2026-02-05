@@ -37,7 +37,7 @@ wt() {
     default_branch="${default_branch:-master}"
 
     local dir_name="${branch//\//-}"
-    local wt_path="$HOME/.cursor/worktrees/${repo_name}/${dir_name}"
+    local wt_path="$HOME/workspace/${repo_name}-${dir_name}"
 
     echo "Fetching latest changes..."
     git fetch origin
@@ -76,7 +76,7 @@ wtrm() {
     local main_wt=$(git worktree list --porcelain | grep '^worktree ' | head -1 | sed 's/^worktree //')
     local repo_name=$(basename "$main_wt")
     local dir_name="${branch//\//-}"
-    local wt_path="$HOME/.cursor/worktrees/${repo_name}/${dir_name}"
+    local wt_path="$HOME/workspace/${repo_name}-${dir_name}"
 
     if [[ ! -d "$wt_path" ]]; then
         echo "Error: Worktree not found at $wt_path"
