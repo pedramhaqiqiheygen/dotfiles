@@ -39,11 +39,17 @@ wt() {
     local dir_name="${branch//\//-}"
     local wt_path="$HOME/.cursor/worktrees/${repo_name}/${dir_name}"
 
-    echo "Fetching origin/${default_branch}..."
-    git fetch origin "$default_branch"
+    echo "Fetching latest changes..."
+    git fetch origin
 
-    echo "Creating worktree..."
-    git worktree add -b "$branch" "$wt_path" "origin/$default_branch"
+    # Check if branch exists locally
+    if git show-ref --verify --quiet "refs/heads/$branch"; then
+        echo "Branch '$branch' already exists, checking it out..."
+        git worktree add "$wt_path" "$branch"
+    else
+        echo "Creating new branch '$branch' from origin/${default_branch}..."
+        git worktree add -b "$branch" "$wt_path" "origin/$default_branch"
+    fi
 
     echo "Opening Cursor..."
     cursor "$wt_path"
