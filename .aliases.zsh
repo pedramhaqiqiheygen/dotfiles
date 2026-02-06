@@ -85,18 +85,33 @@ wt() {
         return 1
     fi
 
+    # Copy .infisical.json so worktree doesn't need `infisical init`
+    if [[ -f "$main_wt/.infisical.json" ]]; then
+        cp "$main_wt/.infisical.json" "$wt_path/.infisical.json"
+    fi
+
     echo "Opening Cursor..."
     cursor "$wt_path"
     echo "Done: $wt_path"
 }
 
 # Remove a worktree, delete its branch, and open Cursor at the main worktree
-# Usage: wtrm <branch-name>
+# Usage: wtrm [-f] <branch-name>
 wtrm() {
+    local force=false
+    if [[ "$1" == "-f" ]]; then
+        force=true
+        shift
+    fi
+
     local branch="$1"
     if [[ -z "$branch" ]]; then
-        echo "Usage: wtrm <branch-name>"
-        return 1
+        branch=$(git symbolic-ref --short HEAD 2>/dev/null)
+        if [[ -z "$branch" ]]; then
+            echo "Usage: wtrm [-f] [branch-name]  (defaults to current branch)"
+            return 1
+        fi
+        echo "No branch specified, using current: $branch"
     fi
 
     local repo_root=$(git rev-parse --show-toplevel 2>/dev/null)
@@ -115,19 +130,30 @@ wtrm() {
 
     # Get main worktree path (for opening after removal)
     local main_wt=$(git worktree list --porcelain | grep '^worktree ' | head -1 | sed 's/^worktree //')
+    local in_removed_wt=false
+    [[ "$repo_root" == "$wt_path" ]] && in_removed_wt=true
+
+    # cd out before removing if we're standing in it
+    if $in_removed_wt; then
+        cd "$main_wt" || return 1
+    fi
 
     echo "Removing worktree at $wt_path..."
-    git worktree remove "$wt_path"
+    if $force; then
+        git worktree remove --force "$wt_path"
+    else
+        git worktree remove "$wt_path"
+    fi
     if [[ $? -ne 0 ]]; then
-        echo "Error: Failed to remove worktree (try: git worktree remove --force \"$wt_path\")"
+        echo "Error: Failed to remove worktree (try: wtrm -f $branch)"
         return 1
     fi
 
     echo "Deleting branch '$branch'..."
     git branch -D "$branch" 2>/dev/null || true
 
-    # Only open main worktree if we just removed the one we were standing in
-    if [[ "$repo_root" == "$wt_path" ]]; then
+    # Open main worktree if we just removed the one we were standing in
+    if $in_removed_wt; then
         echo "Opening main worktree..."
         cursor "$main_wt"
     fi

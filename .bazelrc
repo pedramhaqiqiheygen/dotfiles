@@ -1,0 +1,3 @@
+# Share build cache across worktrees
+common --disk_cache=~/.cache/bazel/disk-cache
+common --repository_cache=~/.cache/bazel/repository-cache
