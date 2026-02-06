@@ -37,8 +37,16 @@ _wt_find_by_branch() {
 wt() {
     local branch="$1"
     if [[ -z "$branch" ]]; then
-        echo "Usage: wt <branch-name>"
-        return 1
+        local repo_root_early=$(git rev-parse --show-toplevel 2>/dev/null)
+        if [[ -z "$repo_root_early" ]]; then
+            echo "Error: Not in a git repository"
+            return 1
+        fi
+        branch=$(git branch -a --format='%(refname:short)' | sed 's|^origin/||' | sort -u \
+            | fzf --prompt="Switch to branch> " --print-query | tail -1)
+        if [[ -z "$branch" ]]; then
+            return 1
+        fi
     fi
 
     local repo_root=$(git rev-parse --show-toplevel 2>/dev/null)
@@ -106,12 +114,15 @@ wtrm() {
 
     local branch="$1"
     if [[ -z "$branch" ]]; then
-        branch=$(git symbolic-ref --short HEAD 2>/dev/null)
+        local main_wt_early=$(git worktree list --porcelain | grep '^worktree ' | head -1 | sed 's/^worktree //')
+        local main_branch_early=$(git -C "$main_wt_early" symbolic-ref --short HEAD 2>/dev/null)
+        branch=$(git worktree list --porcelain \
+            | awk '/^worktree /{path=$2} /^branch refs\/heads\//{sub("refs/heads/",""); print}' \
+            | grep -v "^${main_branch_early}$" \
+            | fzf --prompt="Remove worktree> ")
         if [[ -z "$branch" ]]; then
-            echo "Usage: wtrm [-f] [branch-name]  (defaults to current branch)"
             return 1
         fi
-        echo "No branch specified, using current: $branch"
     fi
 
     local repo_root=$(git rev-parse --show-toplevel 2>/dev/null)
