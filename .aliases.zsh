@@ -42,7 +42,7 @@ wt() {
             echo "Error: Not in a git repository"
             return 1
         fi
-        branch=$(git branch -a --format='%(refname:short)' | sed 's|^origin/||' | sort -u \
+        branch=$(git branch --format='%(refname:short)' | sort \
             | fzf --prompt="Switch to branch> " --print-query | tail -1)
         if [[ -z "$branch" ]]; then
             return 1
@@ -117,7 +117,7 @@ wtrm() {
         local main_wt_early=$(git worktree list --porcelain | grep '^worktree ' | head -1 | sed 's/^worktree //')
         local main_branch_early=$(git -C "$main_wt_early" symbolic-ref --short HEAD 2>/dev/null)
         branch=$(git worktree list --porcelain \
-            | awk '/^worktree /{path=$2} /^branch refs\/heads\//{sub("refs/heads/",""); print}' \
+            | awk '/^branch refs\/heads\//{sub("branch refs/heads/",""); print}' \
             | grep -v "^${main_branch_early}$" \
             | fzf --prompt="Remove worktree> ")
         if [[ -z "$branch" ]]; then
