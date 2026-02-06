@@ -167,8 +167,7 @@ wtrm() {
         return 1
     fi
 
-    echo "Deleting branch '$branch'..."
-    git branch -D "$branch" 2>/dev/null || true
+    echo "Branch '$branch' kept locally"
 
     # Clean up leftover directory
     if [[ -d "$wt_path" ]]; then
