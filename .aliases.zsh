@@ -130,6 +130,13 @@ wtrm() {
 
     # Get main worktree path (for opening after removal)
     local main_wt=$(git worktree list --porcelain | grep '^worktree ' | head -1 | sed 's/^worktree //')
+
+    # Never remove the main worktree
+    if [[ "$wt_path" == "$main_wt" ]]; then
+        echo "Error: Refusing to remove the main worktree"
+        return 1
+    fi
+
     local in_removed_wt=false
     [[ "$repo_root" == "$wt_path" ]] && in_removed_wt=true
 
@@ -151,6 +158,15 @@ wtrm() {
 
     echo "Deleting branch '$branch'..."
     git branch -D "$branch" 2>/dev/null || true
+
+    # Clean up leftover directory
+    if [[ -d "$wt_path" ]]; then
+        read -q "reply?Directory still exists at $wt_path. Remove it? [y/N] "
+        echo
+        if [[ "$reply" == "y" ]]; then
+            rm -rf "$wt_path"
+        fi
+    fi
 
     # Open main worktree if we just removed the one we were standing in
     if $in_removed_wt; then

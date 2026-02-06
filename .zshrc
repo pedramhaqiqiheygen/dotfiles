@@ -26,6 +26,9 @@ export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
 [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"
 
+# Share model zoo cache across worktrees
+export MODEL_ZOO_LOCAL_URI="$HOME/workspace/prodai/heygenai/model_zoo/artifacts_cache"
+
 # Custom
 source "$HOME/.aliases.zsh"
 [[ -f "$HOME/.localconf.zsh" ]] && source "$HOME/.localconf.zsh"
