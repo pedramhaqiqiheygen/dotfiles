@@ -1,0 +1,133 @@
+#!/usr/bin/env bash
+# dev-status - Generate tmux status line content for command center
+# Reads machine config from ~/.config/dev/machines.conf
+#
+# Usage:
+#   dev-status <machine>       - show windows for a machine
+#   dev-status local           - show non-machine windows
+#   dev-status ssh-health <m>  - check SSH reachability
+
+CONF_FILE="$HOME/.config/dev/machines.conf"
+
+# Dotbar palette
+FG_DIM="#475266"
+FG_ACTIVE="#BFBDB6"
+FG_ACCENT="#95E6CB"
+FG_DOT="#333842"
+FG_IDX="#5c6370"
+BG="#0B0E14"
+
+prefix="$1"
+if [[ -z "$prefix" ]]; then
+  exit 0
+fi
+
+# Get SSH host for a machine name from config
+_get_host() {
+  local name="$1"
+  [[ -f "$CONF_FILE" ]] || return
+  grep -v '^#' "$CONF_FILE" | grep -v '^$' | awk -F'|' -v n="$name" '{
+    gsub(/^[ \t]+|[ \t]+$/, "", $1)
+    gsub(/^[ \t]+|[ \t]+$/, "", $2)
+    if ($1 == n) print $2
+  }'
+}
+
+# Get all machine name prefixes (for filtering local windows)
+_all_prefixes() {
+  [[ -f "$CONF_FILE" ]] || return
+  grep -v '^#' "$CONF_FILE" | grep -v '^$' | awk -F'|' '{gsub(/^[ \t]+|[ \t]+$/, "", $1); print $1}'
+}
+
+# --- SSH health check ---
+if [[ "$prefix" == "ssh-health" ]]; then
+  machine="$2"
+  cache_file="/tmp/dev-ssh-health-${machine}"
+  lock_file="/tmp/dev-ssh-health-${machine}.lock"
+
+  host=$(_get_host "$machine")
+  if [[ -z "$host" ]]; then
+    printf "#[fg=${FG_DIM}]●"
+    exit 0
+  fi
+
+  # Always return cached value immediately (never block)
+  if [[ -f "$cache_file" ]]; then
+    cat "$cache_file"
+  else
+    printf "#[fg=${FG_DIM}]●"
+  fi
+
+  # Refresh in background if stale
+  if [[ ! -f "$cache_file" ]] || [[ -n $(find "$cache_file" -mmin +0.5 2>/dev/null) ]]; then
+    if ! [[ -f "$lock_file" ]] || [[ $(($(date +%s) - $(stat -f%m "$lock_file" 2>/dev/null || echo 0))) -gt 10 ]]; then
+      (
+        touch "$lock_file"
+        if ssh -o ConnectTimeout=3 -o BatchMode=yes "$host" "echo ok" &>/dev/null; then
+          printf "#[fg=#a6e3a1]●" > "$cache_file"
+        else
+          printf "#[fg=#f38ba8]●" > "$cache_file"
+        fi
+        rm -f "$lock_file"
+      ) &>/dev/null &
+      disown
+    fi
+  fi
+
+  exit 0
+fi
+
+# --- Window list ---
+
+DOT="#[fg=${FG_DOT}] • #[default]"
+
+# Build list of all machine prefixes for local filtering
+prefixes=()
+mapfile -t prefixes < <(_all_prefixes)
+
+first=true
+has_windows=false
+tmux list-windows -F '#{window_index}|#{window_name}|#{window_active}|#{window_panes}' 2>/dev/null | \
+  while IFS='|' read -r idx name active panes; do
+    if [[ "$prefix" == "local" ]]; then
+      # Skip any window matching a known machine prefix
+      local skip=false
+      for p in "${prefixes[@]}"; do
+        [[ "$name" == ${p}:* ]] && skip=true && break
+      done
+      [[ "$skip" == true ]] && continue
+      short="$name"
+    else
+      [[ "$name" != ${prefix}:* ]] && continue
+      short="${name#${prefix}:}"
+    fi
+
+    has_windows=true
+
+    if [[ "$first" == true ]]; then
+      first=false
+    else
+      printf "%s" "$DOT"
+    fi
+
+    local pane_info=""
+    if [[ "$panes" -gt 1 ]]; then
+      pane_info="[${panes}]"
+    fi
+
+    if [[ "$active" == "1" ]]; then
+      printf "#[fg=${FG_IDX}]%s:#[fg=${FG_ACTIVE},bold]%s#[default]" "$idx" "$short"
+      if [[ -n "$pane_info" ]]; then
+        printf "#[fg=${FG_ACCENT}]%s#[default]" "$pane_info"
+      fi
+    else
+      printf "#[fg=${FG_DOT}]%s:#[fg=${FG_DIM}]%s" "$idx" "$short"
+      if [[ -n "$pane_info" ]]; then
+        printf "#[fg=${FG_DOT}]%s" "$pane_info"
+      fi
+    fi
+  done
+
+if [[ "$has_windows" != true ]]; then
+  printf "#[fg=${FG_DOT}]—#[default]"
+fi

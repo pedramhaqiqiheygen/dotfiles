@@ -33,74 +33,61 @@ _wt_find_by_branch() {
 }
 
 # Create or open a worktree for a branch and open Cursor
-# Usage: wt <branch-name>
+# Usage: wt [--no-cursor] <branch-name>
 wt() {
-    local branch="$1"
-    if [[ -z "$branch" ]]; then
-        local repo_root_early=$(git rev-parse --show-toplevel 2>/dev/null)
-        if [[ -z "$repo_root_early" ]]; then
-            echo "Error: Not in a git repository"
-            return 1
-        fi
-        branch=$(git branch --format='%(refname:short)' | sort \
-            | fzf --prompt="Switch to branch> " --print-query | tail -1)
-        if [[ -z "$branch" ]]; then
-            return 1
-        fi
-    fi
+  local open_cursor=true
+  local branch=""
 
-    local repo_root=$(git rev-parse --show-toplevel 2>/dev/null)
-    if [[ -z "$repo_root" ]]; then
-        echo "Error: Not in a git repository"
-        return 1
-    fi
+  # Parse args
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --no-cursor) open_cursor=false; shift ;;
+      *) branch="$1"; shift ;;
+    esac
+  done
 
-    # Check if a worktree already exists for this branch
-    local existing_path
-    existing_path=$(_wt_find_by_branch "$branch")
-    if [[ $? -eq 0 && -n "$existing_path" ]]; then
-        echo "Worktree already exists at $existing_path"
-        cursor "$existing_path"
-        return 0
-    fi
+  # If no branch given, use fzf
+  if [[ -z "$branch" ]]; then
+    branch="$(git branch -a | grep -v '\*' | sed 's/remotes\///' | fzf --preview 'git show --color=always {}' --preview-window=right:70%)"
+  fi
 
-    # Compute path for new worktree
-    local main_wt=$(git worktree list --porcelain | grep '^worktree ' | head -1 | sed 's/^worktree //')
-    local repo_name=$(basename "$main_wt")
-    local default_branch=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@')
-    default_branch="${default_branch:-master}"
+  if [[ -z "$branch" ]]; then
+    return 1
+  fi
 
-    local dir_name="${branch//\//-}"
-    local wt_path="$HOME/workspace/${repo_name}-${dir_name}"
+  # Remove 'remotes/' prefix if present
+  branch="${branch#remotes/}"
 
-    echo "Fetching latest changes..."
-    git fetch origin
+  # Fetch latest
+  git fetch origin
 
-    # Create worktree
-    if git show-ref --verify --quiet "refs/heads/$branch"; then
-        echo "Branch '$branch' exists, creating worktree..."
-        git worktree add "$wt_path" "$branch"
-    elif git show-ref --verify --quiet "refs/remotes/origin/$branch"; then
-        echo "Remote branch 'origin/$branch' found, creating tracking worktree..."
-        git worktree add "$wt_path" "$branch"
+  local worktree_dir="$PWD/../${branch}"
+
+  # Create branch if needed
+  if ! git branch -a | grep -q "^  ${branch}$"; then
+    if git branch -a | grep -q "remotes/origin/${branch}"; then
+      git branch --track "${branch}" "origin/${branch}"
     else
-        echo "Creating new branch '$branch' from origin/${default_branch}..."
-        git worktree add -b "$branch" "$wt_path" "origin/$default_branch"
+      git branch "${branch}"
     fi
+  fi
 
-    if [[ $? -ne 0 ]]; then
-        echo "Error: Failed to create worktree"
-        return 1
-    fi
+  # Create worktree if needed
+  if [ ! -d "$worktree_dir" ]; then
+    git worktree add "$worktree_dir" "${branch}"
+  fi
 
-    # Copy .infisical.json so worktree doesn't need `infisical init`
-    if [[ -f "$main_wt/.infisical.json" ]]; then
-        cp "$main_wt/.infisical.json" "$wt_path/.infisical.json"
-    fi
+  # Copy .infisical.json if it exists
+  if [ -f "$PWD/.infisical.json" ]; then
+    cp "$PWD/.infisical.json" "$worktree_dir/"
+  fi
 
-    echo "Opening Cursor..."
-    cursor "$wt_path"
-    echo "Done: $wt_path"
+  cd "$worktree_dir"
+
+  # Open editor unless --no-cursor
+  if [[ "$open_cursor" == true ]]; then
+    cursor .
+  fi
 }
 
 # Remove a worktree, delete its branch, and open Cursor at the main worktree

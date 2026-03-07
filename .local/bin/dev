@@ -1,0 +1,409 @@
+#!/usr/bin/env bash
+# dev - Terminal command center for remote dev machines
+# Usage:
+#   dev                          # fzf pick a machine
+#   dev <machine>                # SSH + attach remote tmux (home dir)
+#   dev <machine> <repo>         # SSH + cd to repo + remote tmux
+#   dev <machine> <repo> --claude    # SSH + repo + claude code
+#   dev <machine> <repo> --wt <branch>  # SSH + repo + worktree + claude
+#   dev <machine> --list         # List remote tmux sessions
+#   dev <machine> --repos        # List cached repos on machine
+#   dev <machine> --kill <session>   # Kill a remote tmux session
+#   dev setup                    # Auto-detect SSH hosts and configure machines
+
+set -euo pipefail
+
+CONF_DIR="$HOME/.config/dev"
+CONF_FILE="$CONF_DIR/machines.conf"
+LOCAL_CACHE_DIR="$HOME/.cache/dev"
+
+# --- Config parsing ---
+
+# Read machines.conf, return lines as: name|host|workspace|icon|color|status
+_read_config() {
+  [[ -f "$CONF_FILE" ]] || return
+  grep -v '^#' "$CONF_FILE" | grep -v '^$'
+}
+
+# Get a field for a machine: _get_field <name> <field_num>
+# Fields: 1=name 2=ssh_host 3=workspace 4=icon 5=color 6=show_on_status
+_get_field() {
+  local name="$1" field="$2"
+  _read_config | awk -F'|' -v n="$name" -v f="$field" '$1 == n {gsub(/^[ \t]+|[ \t]+$/, "", $f); print $f}'
+}
+
+# List all machine names
+_list_machines() {
+  _read_config | awk -F'|' '{gsub(/^[ \t]+|[ \t]+$/, "", $1); print $1}'
+}
+
+# List machines with show_on_status=true
+_status_machines() {
+  _read_config | awk -F'|' '{gsub(/^[ \t]+|[ \t]+$/, "", $1); gsub(/^[ \t]+|[ \t]+$/, "", $6); if ($6 == "true") print $1}'
+}
+
+# --- Setup wizard ---
+
+setup() {
+  mkdir -p "$CONF_DIR"
+
+  echo "Dev Command Center — Setup"
+  echo ""
+
+  # Parse SSH config for hosts (skip wildcards, github, etc.)
+  local ssh_hosts=()
+  if [[ -f "$HOME/.ssh/config" ]]; then
+    while IFS= read -r host; do
+      # Skip common non-machine hosts
+      [[ "$host" == "github.com" ]] && continue
+      [[ "$host" == "*" ]] && continue
+      [[ -z "$host" ]] && continue
+      ssh_hosts+=("$host")
+    done < <(grep -i '^Host ' "$HOME/.ssh/config" | awk '{print $2}')
+  fi
+
+  if [[ ${#ssh_hosts[@]} -eq 0 ]]; then
+    echo "No SSH hosts found in ~/.ssh/config"
+    echo "Add hosts to ~/.ssh/config first, then run 'dev setup' again."
+    exit 1
+  fi
+
+  echo "Found SSH hosts: ${ssh_hosts[*]}"
+  echo ""
+
+  # Load existing config
+  declare -A existing_hosts
+  if [[ -f "$CONF_FILE" ]]; then
+    while IFS='|' read -r name host rest; do
+      name=$(echo "$name" | xargs)
+      host=$(echo "$host" | xargs)
+      existing_hosts[$host]="$name"
+    done < <(_read_config)
+  fi
+
+  # Available icons (Material Design range — known to render)
+  local icons=("󰢮" "󰅟" "󰒋" "󰆍" "󱂵" "󰨡" "󰣀" "󰍹")
+  local colors=("#a6e3a1" "#7aa2f7" "#e0af68" "#f38ba8" "#cba6f7" "#89dcfe" "#fab387" "#94e2d5")
+  local icon_idx=0
+
+  # Build new config
+  local new_lines=()
+  new_lines+=("# Dev Command Center - Machine Configuration")
+  new_lines+=("# Format: name|ssh_host|workspace|icon|color|show_on_status")
+  new_lines+=("")
+
+  for host in "${ssh_hosts[@]}"; do
+    echo "───────────────────────"
+    echo "SSH host: $host"
+
+    # Check if already configured
+    if [[ -n "${existing_hosts[$host]:-}" ]]; then
+      local existing_name="${existing_hosts[$host]}"
+      echo "  Already configured as: $existing_name"
+      read -r -p "  Keep existing config? [Y/n] " keep
+      if [[ "${keep,,}" != "n" ]]; then
+        # Preserve existing line
+        local existing_line
+        existing_line=$(_read_config | grep "|${host}|" | head -1)
+        new_lines+=("$existing_line")
+        continue
+      fi
+    fi
+
+    read -r -p "  Add this machine? [y/N] " add
+    if [[ "${add,,}" != "y" ]]; then
+      continue
+    fi
+
+    read -r -p "  Friendly name (e.g. gpu, aws, prod): " name
+    [[ -z "$name" ]] && continue
+
+    read -r -p "  Workspace path [~/workspace]: " workspace
+    workspace="${workspace:-~/workspace}"
+
+    # Auto-assign icon and color
+    local icon="${icons[$icon_idx % ${#icons[@]}]}"
+    local color="${colors[$icon_idx % ${#colors[@]}]}"
+    icon_idx=$((icon_idx + 1))
+
+    read -r -p "  Show on tmux status bar? [Y/n] " show
+    show=$([[ "${show,,}" == "n" ]] && echo "false" || echo "true")
+
+    new_lines+=("${name}|${host}|${workspace}|${icon}|${color}|${show}")
+    echo "  Added: $name → $host"
+  done
+
+  echo ""
+
+  # Write config
+  printf '%s\n' "${new_lines[@]}" > "$CONF_FILE"
+  echo "Config saved to $CONF_FILE"
+
+  # Regenerate tmux status config
+  _generate_tmux_status
+
+  echo ""
+  echo "Done! Reload tmux: tmux source-file ~/.config/tmux/tmux.local.conf"
+}
+
+# Generate tmux status-format lines from config
+_generate_tmux_status() {
+  local status_file="$CONF_DIR/tmux-status.conf"
+  local machines=()
+  mapfile -t machines < <(_status_machines)
+  local count=${#machines[@]}
+
+  {
+    echo "# Auto-generated by 'dev setup' — do not edit manually"
+    echo "# Regenerate with: dev setup"
+    echo ""
+    echo "set -g status $((count + 1))"
+    echo ""
+
+    local i=0
+    for machine in "${machines[@]}"; do
+      local icon color
+      icon=$(_get_field "$machine" 4)
+      color=$(_get_field "$machine" 5)
+      local label
+      label=$(echo "$machine" | tr '[:lower:]' '[:upper:]')
+
+      echo "# $label"
+      echo "set -g status-format[$i] \"#[bg=\${BG}] #(~/.local/bin/dev-status ssh-health $machine) #[fg=${color}]${icon} ${label}#[default]#[bg=\${BG}]  #(~/.local/bin/dev-status $machine)#[align=right] \""
+      echo ""
+      i=$((i + 1))
+    done
+
+    # Local line (always last)
+    echo "# HOME (local)"
+    echo "set -g status-format[$i] \"#[bg=\${BG}] #[fg=\${HEALTH_OK}]●#[default]#[bg=\${BG}] #[fg=\${LOCAL_COLOR}]󰆍 HOME#[default]#[bg=\${BG}]  #(~/.local/bin/dev-status local)#[align=right]#{?client_prefix,#[fg=\${FG_ACCENT}] C-a #[default],}#[fg=\${FG_DIM}]%H:%M #[fg=\${FG_DOT}]%a %-d %b \""
+  } > "$status_file"
+
+  echo "Generated tmux status config: $status_file"
+}
+
+# --- Core functions ---
+
+usage() {
+  local machines
+  machines=$(_list_machines | tr '\n' ', ' | sed 's/,$//')
+  cat <<EOF
+Usage: dev [machine] [repo] [options]
+
+Machines: $machines
+  (configure with 'dev setup')
+
+Options:
+  --claude          Start claude code in remote tmux session
+  --wt <branch>    Create/open worktree for branch, then claude
+  --list           List active remote tmux sessions
+  --repos          List available repos on machine
+  --kill <session> Kill a remote tmux session
+  --session <name> Attach to specific remote tmux session (default: repo name or main)
+
+Commands:
+  dev setup         Auto-detect SSH hosts and configure machines
+
+Examples:
+  dev gpu                      # SSH into GPU, home dir
+  dev gpu myrepo               # SSH into GPU, cd to ~/workspace/myrepo
+  dev gpu myrepo --claude      # SSH + repo + start claude code
+  dev gpu myrepo --wt feat-xyz # SSH + repo + worktree + claude
+  dev gpu --repos              # List repos on GPU
+  dev gpu --list               # Show GPU tmux sessions
+EOF
+}
+
+pick_machine() {
+  _list_machines | fzf --prompt="Machine: " --height=10
+}
+
+get_host() {
+  _get_field "$1" 2
+}
+
+get_workspace() {
+  _get_field "$1" 3
+}
+
+refresh_cache() {
+  local machine="$1"
+  local host="$2"
+  mkdir -p "$LOCAL_CACHE_DIR"
+  local cache_file="$LOCAL_CACHE_DIR/repos-${machine}.txt"
+  local workspace
+  workspace=$(get_workspace "$machine")
+  ssh "$host" "find $workspace -maxdepth 2 -name .git -type d 2>/dev/null | xargs -I{} dirname {} | xargs -I{} basename {}" > "$cache_file" 2>/dev/null
+}
+
+get_repos() {
+  local machine="$1"
+  local host="$2"
+  mkdir -p "$LOCAL_CACHE_DIR"
+  local cache_file="$LOCAL_CACHE_DIR/repos-${machine}.txt"
+
+  if [[ ! -f "$cache_file" ]] || [[ $(find "$cache_file" -mmin +60 2>/dev/null) ]]; then
+    refresh_cache "$machine" "$host" >/dev/null
+  fi
+
+  cat "$cache_file" 2>/dev/null
+}
+
+list_sessions() {
+  local host="$1"
+  ssh "$host" "tmux list-sessions 2>/dev/null || echo 'No active tmux sessions'"
+}
+
+kill_session() {
+  local host="$1"
+  local session="$2"
+  ssh "$host" "tmux kill-session -t '$session' 2>/dev/null && echo 'Killed: $session' || echo 'Session not found: $session'"
+}
+
+connect() {
+  local machine="$1"
+  local host="$2"
+  local session="${3:-main}"
+  local start_dir="${4:-}"
+  local post_cmd="${5:-}"
+
+  local window_name="${machine}:${session}"
+
+  local setup_cmd=""
+  if [[ -n "$start_dir" ]]; then
+    setup_cmd="cd ${start_dir} && "
+  fi
+
+  # Refresh repo cache in background
+  (refresh_cache "$machine" "$host" &) >/dev/null 2>&1
+
+  local remote_cmd="tmux new-session -A -s '${session}'"
+  if [[ -n "$start_dir" ]] || [[ -n "$post_cmd" ]]; then
+    local send_cmd="${setup_cmd}${post_cmd}"
+    remote_cmd="tmux new-session -A -s '${session}' -c '${start_dir:-\$HOME}' \\; send-keys '${send_cmd}' Enter"
+  fi
+
+  if [[ -n "${TMUX:-}" ]]; then
+    local existing
+    existing=$(tmux list-windows -F '#{window_index}|#{window_name}' 2>/dev/null | grep "|${window_name}$" | head -1 | cut -d'|' -f1)
+    if [[ -n "$existing" ]]; then
+      tmux select-window -t "$existing"
+    else
+      tmux new-window -n "$window_name" "ssh -t $host \"$remote_cmd\""
+    fi
+  else
+    ssh -t "$host" "$remote_cmd"
+  fi
+}
+
+# --- Main ---
+
+main() {
+  # Ensure config exists
+  if [[ ! -f "$CONF_FILE" ]]; then
+    echo "No machine config found. Running setup..."
+    setup
+    exit 0
+  fi
+
+  local machine=""
+  local repo=""
+  local session=""
+  local branch=""
+  local claude_flag=false
+
+  # Handle subcommands
+  if [[ $# -gt 0 ]]; then
+    case "$1" in
+      setup) setup; exit 0 ;;
+    esac
+  fi
+
+  # No args = fzf picker
+  if [[ $# -eq 0 ]]; then
+    machine=$(pick_machine) || exit 0
+  else
+    machine="$1"
+    shift
+  fi
+
+  # Validate machine
+  local host
+  host=$(get_host "$machine")
+  if [[ -z "$host" ]]; then
+    echo "Unknown machine: $machine"
+    echo "Available: $(_list_machines | tr '\n' ' ')"
+    echo "Run 'dev setup' to configure machines."
+    exit 1
+  fi
+
+  # Second positional arg: repo name
+  if [[ $# -gt 0 ]] && [[ "$1" != --* ]]; then
+    repo="$1"
+    shift
+  fi
+
+  # Parse options
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --list)
+        list_sessions "$host"
+        exit 0
+        ;;
+      --repos)
+        echo "Repos on $machine ($host):"
+        refresh_cache "$machine" "$host" >/dev/null
+        get_repos "$machine" "$host"
+        exit 0
+        ;;
+      --kill)
+        kill_session "$host" "${2:?'Session name required'}"
+        exit 0
+        ;;
+      --claude)
+        claude_flag=true
+        shift
+        ;;
+      --wt)
+        branch="${2:?'Branch name required'}"
+        claude_flag=true
+        shift 2
+        ;;
+      --session|-s)
+        session="${2:?'Session name required'}"
+        shift 2
+        ;;
+      --help|-h)
+        usage
+        exit 0
+        ;;
+      *)
+        echo "Unknown option: $1"
+        usage
+        exit 1
+        ;;
+    esac
+  done
+
+  # Determine start directory and session name
+  local start_dir=""
+  if [[ -n "$repo" ]]; then
+    start_dir="$(get_workspace "$machine")/${repo}"
+    session="${session:-$repo}"
+  else
+    session="${session:-main}"
+  fi
+
+  # Build post-connection command
+  local post_cmd=""
+  if [[ -n "$branch" ]]; then
+    session="${repo:-wt}-${branch}"
+    post_cmd="wt ${branch} --no-cursor && claude"
+  elif [[ "$claude_flag" == true ]]; then
+    post_cmd="claude"
+  fi
+
+  connect "$machine" "$host" "$session" "$start_dir" "$post_cmd"
+}
+
+main "$@"

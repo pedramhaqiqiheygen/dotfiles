@@ -1,19 +1,21 @@
 #!/bin/bash
 set -e
 
-echo "Setting up Linux dev environment..."
+echo "Setting up macOS dev environment..."
+
+# Homebrew
+if ! command -v brew &>/dev/null; then
+    echo "Installing Homebrew..."
+    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+fi
 
 # Core tools
-sudo apt-get update
-sudo apt-get install -y \
-    zsh \
-    neovim \
-    tmux \
-    fzf \
-    zoxide \
-    git \
-    curl \
-    fontconfig
+echo "Installing core tools..."
+brew install tmux fzf zoxide neovim git curl
+
+# Nerd Font (required for tmux theme icons)
+echo "Installing JetBrainsMono Nerd Font..."
+brew install --cask font-jetbrains-mono-nerd-font
 
 # Oh My Zsh
 if [[ ! -d "$HOME/.oh-my-zsh" ]]; then
@@ -27,22 +29,6 @@ ZSH_CUSTOM="${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}"
     git clone https://github.com/zsh-users/zsh-autosuggestions "$ZSH_CUSTOM/plugins/zsh-autosuggestions"
 [[ -d "$ZSH_CUSTOM/plugins/zsh-syntax-highlighting" ]] || \
     git clone https://github.com/zsh-users/zsh-syntax-highlighting "$ZSH_CUSTOM/plugins/zsh-syntax-highlighting"
-[[ -d "$ZSH_CUSTOM/plugins/fast-syntax-highlighting" ]] || \
-    git clone https://github.com/zdharma-continuum/fast-syntax-highlighting "$ZSH_CUSTOM/plugins/fast-syntax-highlighting"
-[[ -d "$ZSH_CUSTOM/plugins/zsh-autocomplete" ]] || \
-    git clone https://github.com/marlonrichert/zsh-autocomplete "$ZSH_CUSTOM/plugins/zsh-autocomplete"
-
-# JetBrainsMono Nerd Font
-FONT_DIR="$HOME/.local/share/fonts"
-if ! fc-list | grep -qi "JetBrainsMono Nerd"; then
-    echo "Installing JetBrainsMono Nerd Font..."
-    mkdir -p "$FONT_DIR"
-    FONT_URL="https://github.com/ryanoasis/nerd-fonts/releases/latest/download/JetBrainsMono.zip"
-    curl -fsSL "$FONT_URL" -o /tmp/JetBrainsMono.zip
-    unzip -o /tmp/JetBrainsMono.zip -d "$FONT_DIR" >/dev/null
-    rm /tmp/JetBrainsMono.zip
-    fc-cache -fv >/dev/null
-fi
 
 # TPM (tmux plugin manager)
 if [[ ! -d "$HOME/.tmux/plugins/tpm" ]]; then
@@ -66,4 +52,7 @@ fi
 chmod +x ~/.local/bin/dev ~/.local/bin/dev-status 2>/dev/null
 
 echo ""
-echo "Done! Run 'chsh -s $(which zsh)' to set zsh as default shell."
+echo "Done! Next steps:"
+echo "  1. Set iTerm font to 'JetBrainsMono Nerd Font' (Settings → Profiles → Text)"
+echo "  2. Run 'chsh -s $(which zsh)' to set zsh as default shell"
+echo "  3. Open a new terminal — tmux command center starts automatically"
