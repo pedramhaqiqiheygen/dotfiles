@@ -9,13 +9,12 @@
 
 CONF_FILE="$HOME/.config/dev/machines.conf"
 
-# Dotbar palette
+# Dotbar palette (hardcoded — no tmux variable dependency)
 FG_DIM="#475266"
 FG_ACTIVE="#BFBDB6"
 FG_ACCENT="#95E6CB"
 FG_DOT="#333842"
 FG_IDX="#5c6370"
-BG="#0B0E14"
 
 prefix="$1"
 if [[ -z "$prefix" ]]; then
@@ -85,49 +84,50 @@ DOT="#[fg=${FG_DOT}] • #[default]"
 prefixes=()
 mapfile -t prefixes < <(_all_prefixes)
 
+# Use process substitution instead of pipe to avoid subshell variable scoping
 first=true
 has_windows=false
-tmux list-windows -F '#{window_index}|#{window_name}|#{window_active}|#{window_panes}' 2>/dev/null | \
-  while IFS='|' read -r idx name active panes; do
-    if [[ "$prefix" == "local" ]]; then
-      # Skip any window matching a known machine prefix
-      local skip=false
-      for p in "${prefixes[@]}"; do
-        [[ "$name" == ${p}:* ]] && skip=true && break
-      done
-      [[ "$skip" == true ]] && continue
-      short="$name"
-    else
-      [[ "$name" != ${prefix}:* ]] && continue
-      short="${name#${prefix}:}"
+while IFS='|' read -r idx name active panes; do
+  if [[ "$prefix" == "local" ]]; then
+    # Skip any window matching a known machine prefix
+    skip=false
+    for p in "${prefixes[@]}"; do
+      [[ "$name" == ${p}:* ]] && skip=true && break
+    done
+    [[ "$skip" == true ]] && continue
+    short="$name"
+  else
+    [[ "$name" != ${prefix}:* ]] && continue
+    short="${name#${prefix}:}"
+  fi
+
+  has_windows=true
+
+  if [[ "$first" == true ]]; then
+    first=false
+  else
+    printf "%s" "$DOT"
+  fi
+
+  pane_info=""
+  if [[ "$panes" -gt 1 ]]; then
+    pane_info="[${panes}]"
+  fi
+
+  if [[ "$active" == "1" ]]; then
+    printf "#[fg=${FG_IDX}]%s:#[fg=${FG_ACTIVE},bold]%s#[default]" "$idx" "$short"
+    if [[ -n "$pane_info" ]]; then
+      printf "#[fg=${FG_ACCENT}]%s#[default]" "$pane_info"
     fi
-
-    has_windows=true
-
-    if [[ "$first" == true ]]; then
-      first=false
-    else
-      printf "%s" "$DOT"
+  else
+    printf "#[fg=${FG_DOT}]%s:#[fg=${FG_DIM}]%s" "$idx" "$short"
+    if [[ -n "$pane_info" ]]; then
+      printf "#[fg=${FG_DOT}]%s" "$pane_info"
     fi
+  fi
+done < <(tmux list-windows -F '#{window_index}|#{window_name}|#{window_active}|#{window_panes}' 2>/dev/null)
 
-    local pane_info=""
-    if [[ "$panes" -gt 1 ]]; then
-      pane_info="[${panes}]"
-    fi
-
-    if [[ "$active" == "1" ]]; then
-      printf "#[fg=${FG_IDX}]%s:#[fg=${FG_ACTIVE},bold]%s#[default]" "$idx" "$short"
-      if [[ -n "$pane_info" ]]; then
-        printf "#[fg=${FG_ACCENT}]%s#[default]" "$pane_info"
-      fi
-    else
-      printf "#[fg=${FG_DOT}]%s:#[fg=${FG_DIM}]%s" "$idx" "$short"
-      if [[ -n "$pane_info" ]]; then
-        printf "#[fg=${FG_DOT}]%s" "$pane_info"
-      fi
-    fi
-  done
-
+# If no windows found, show dash
 if [[ "$has_windows" != true ]]; then
   printf "#[fg=${FG_DOT}]—#[default]"
 fi

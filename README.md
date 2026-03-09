@@ -46,6 +46,7 @@ dev <machine> <repo> --wt <branch>  # SSH + repo + worktree + claude
 dev <machine> --list         # List remote tmux sessions
 dev <machine> --repos        # List repos on machine
 dev <machine> --kill <name>  # Kill a remote tmux session
+dev <machine> --session <n>  # Attach to specific remote tmux session
 dev setup                    # Configure machines from SSH hosts
 ```
 
@@ -54,12 +55,16 @@ dev setup                    # Configure machines from SSH hosts
 Machines are configured in `~/.config/dev/machines.conf`:
 
 ```
-# name|ssh_host|workspace|icon|color|show_on_status
-gpu|nebius|~/workspace|icon|#a6e3a1|true
-aws|devbox|~/workspaces|icon|#7aa2f7|true
+# name|ssh_host|workspace|icon|color|show_on_status|key
+gpu|nebius|~/workspace|icon|#a6e3a1|true|g
+aws|devbox|~/workspaces|icon|#7aa2f7|true|d
 ```
 
-Run `dev setup` to auto-detect SSH hosts from `~/.ssh/config` and interactively configure them. The tmux status bar regenerates automatically.
+The `key` field defines the quick-access letter for each machine:
+- **Tmux keybinding:** `C-a <key>` opens an SSH window to that machine
+- **Shell aliases:** `d<key>` connects, `d<key>c` starts Claude, `d<key>l` lists sessions, `d<key>r` lists repos
+
+Run `dev setup` to auto-detect SSH hosts from `~/.ssh/config` and interactively configure them. All keybindings, aliases, and status lines regenerate automatically.
 
 ### Nested tmux
 
@@ -67,11 +72,11 @@ Local tmux uses `C-a` as prefix, remote uses `C-b`. They don't collide:
 
 - `C-a <key>` always controls your local tmux
 - `C-b <key>` passes through to the remote tmux
-- `C-a g` / `C-a d` — quick-open GPU / AWS windows
+- `C-a a` sends `C-b` to the nested remote tmux
 
 ### Status Bar
 
-Three lines (one per machine + local), powered by a dotbar-inspired theme:
+One line per machine + local, powered by a dotbar-inspired theme:
 
 - Health dot (green/red) per machine — async SSH probe, never blocks
 - Nerd Font icons for each machine type
@@ -86,11 +91,12 @@ Three lines (one per machine + local), powered by a dotbar-inspired theme:
   theme.conf          # Dotbar color palette + icon definitions
   tmux.shared.conf    # Common settings (mouse, vim-nav, splits, vi keys)
   tmux.conf           # Remote config (C-b prefix, hostname status bar)
-  tmux.local.conf     # Local config (C-a prefix, 3-line command center)
+  tmux.local.conf     # Local config (C-a prefix, command center)
 
 .config/dev/
   machines.conf       # Machine registry (edit or use `dev setup`)
-  tmux-status.conf    # Auto-generated status lines
+  tmux-status.conf    # Auto-generated status lines + keybindings
+  aliases.sh          # Auto-generated shell aliases
 
 .local/bin/
   dev                 # Dev command
