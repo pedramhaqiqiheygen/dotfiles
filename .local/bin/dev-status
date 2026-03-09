@@ -3,11 +3,13 @@
 # Reads machine config from ~/.config/dev/machines.conf
 #
 # Usage:
-#   dev-status <machine>       - show windows for a machine
-#   dev-status local           - show non-machine windows
+#   dev-status <machine>       - show windows for a machine (local + remote pane counts)
+#   dev-status local           - show non-machine local windows
 #   dev-status ssh-health <m>  - check SSH reachability
 
 CONF_FILE="$HOME/.config/dev/machines.conf"
+CACHE_DIR="/tmp/dev-status-cache"
+mkdir -p "$CACHE_DIR" 2>/dev/null
 
 # Dotbar palette (hardcoded — no tmux variable dependency)
 FG_DIM="#475266"
@@ -38,53 +40,117 @@ _all_prefixes() {
   grep -v '^#' "$CONF_FILE" | grep -v '^$' | awk -F'|' '{gsub(/^[ \t]+|[ \t]+$/, "", $1); print $1}'
 }
 
+# --- Non-blocking background refresh helper ---
+# Usage: _bg_refresh <cache_key> <ttl_seconds> <command...>
+# Always returns cached value immediately. Refreshes in background if stale.
+_bg_refresh() {
+  local cache_key="$1" ttl="$2"
+  shift 2
+  local cache_file="$CACHE_DIR/$cache_key"
+  local lock_file="$CACHE_DIR/${cache_key}.lock"
+
+  # Always return cached value immediately
+  if [[ -f "$cache_file" ]]; then
+    cat "$cache_file"
+  fi
+
+  # Check if stale
+  local stale=false
+  if [[ ! -f "$cache_file" ]]; then
+    stale=true
+  elif command -v stat &>/dev/null; then
+    local now age mtime
+    now=$(date +%s)
+    # macOS stat vs Linux stat
+    if stat -f%m /dev/null &>/dev/null 2>&1; then
+      mtime=$(stat -f%m "$cache_file" 2>/dev/null || echo 0)
+    else
+      mtime=$(stat -c%Y "$cache_file" 2>/dev/null || echo 0)
+    fi
+    age=$((now - mtime))
+    [[ $age -gt $ttl ]] && stale=true
+  fi
+
+  # Refresh in background if stale and not already refreshing
+  if [[ "$stale" == true ]]; then
+    if ! [[ -f "$lock_file" ]]; then
+      (
+        touch "$lock_file"
+        local tmp_file="${cache_file}.tmp"
+        eval "$@" > "$tmp_file" 2>/dev/null
+        mv -f "$tmp_file" "$cache_file" 2>/dev/null
+        rm -f "$lock_file"
+      ) &>/dev/null &
+      disown
+    fi
+  fi
+}
+
 # --- SSH health check ---
 if [[ "$prefix" == "ssh-health" ]]; then
   machine="$2"
-  cache_file="/tmp/dev-ssh-health-${machine}"
-  lock_file="/tmp/dev-ssh-health-${machine}.lock"
-
   host=$(_get_host "$machine")
   if [[ -z "$host" ]]; then
     printf "#[fg=${FG_DIM}]●"
     exit 0
   fi
 
-  # Always return cached value immediately (never block)
-  if [[ -f "$cache_file" ]]; then
-    cat "$cache_file"
-  else
-    printf "#[fg=${FG_DIM}]●"
+  # If there's an active tmux window for this machine, we're connected — skip probe
+  if tmux list-windows -F '#{window_name}' 2>/dev/null | grep -q "^${machine}:"; then
+    printf "#[fg=#a6e3a1]●"
+    # Keep cache warm so it doesn't go stale when window closes
+    printf "#[fg=#a6e3a1]●" > "$CACHE_DIR/health-${machine}" 2>/dev/null
+    exit 0
   fi
 
-  # Refresh in background if stale
-  if [[ ! -f "$cache_file" ]] || [[ -n $(find "$cache_file" -mmin +0.5 2>/dev/null) ]]; then
-    if ! [[ -f "$lock_file" ]] || [[ $(($(date +%s) - $(stat -f%m "$lock_file" 2>/dev/null || echo 0))) -gt 10 ]]; then
-      (
-        touch "$lock_file"
-        if ssh -o ConnectTimeout=3 -o BatchMode=yes "$host" "echo ok" &>/dev/null; then
-          printf "#[fg=#a6e3a1]●" > "$cache_file"
-        else
-          printf "#[fg=#f38ba8]●" > "$cache_file"
-        fi
-        rm -f "$lock_file"
-      ) &>/dev/null &
-      disown
-    fi
+  _bg_refresh "health-${machine}" 30 \
+    "if ssh -o ConnectTimeout=3 -o BatchMode=yes '$host' 'echo ok' &>/dev/null; then printf '#[fg=#a6e3a1]●'; else printf '#[fg=#f38ba8]●'; fi"
+
+  # If no cache yet, show dim
+  if [[ ! -f "$CACHE_DIR/health-${machine}" ]]; then
+    printf "#[fg=${FG_DIM}]●"
   fi
 
   exit 0
 fi
 
+# --- Remote pane info (background refresh) ---
+# Fetches remote tmux session:pane_count pairs, cached per machine
+_get_remote_panes() {
+  local machine="$1"
+  local cache_file="$CACHE_DIR/panes-${machine}"
+  local host
+  host=$(_get_host "$machine")
+  [[ -z "$host" ]] && return
+
+  # Refresh cache in background (every 5 seconds) — suppress stdout
+  _bg_refresh "panes-${machine}" 5 \
+    "ssh -o ConnectTimeout=3 -o BatchMode=yes '$host' 'tmux list-windows -a -F \"#{session_name}|#{window_panes}\" 2>/dev/null' | awk -F\"|\" \"{panes[\\\$1]+=\\\$2} END {for (s in panes) print s\\\"|\\\"panes[s]}\"" > /dev/null
+
+  # Return nothing — caller reads cache file directly
+}
+
+# Lookup remote pane count for a session name
+_remote_pane_count() {
+  local machine="$1" session="$2"
+  local cache_file="$CACHE_DIR/panes-${machine}"
+  [[ -f "$cache_file" ]] || return
+  awk -F'|' -v s="$session" '$1 == s {print $2}' "$cache_file"
+}
+
 # --- Window list ---
 
-DOT="#[fg=${FG_DOT}] • #[default]"
+DOT="#[fg=${FG_DOT}] · #[default]"
 
 # Build list of all machine prefixes for local filtering
 prefixes=()
 mapfile -t prefixes < <(_all_prefixes)
 
-# Use process substitution instead of pipe to avoid subshell variable scoping
+# Trigger remote pane refresh for machine views
+if [[ "$prefix" != "local" ]]; then
+  _get_remote_panes "$prefix"
+fi
+
 first=true
 has_windows=false
 while IFS='|' read -r idx name active panes; do
@@ -109,9 +175,20 @@ while IFS='|' read -r idx name active panes; do
     printf "%s" "$DOT"
   fi
 
+  # For remote windows, show remote pane count; for local, show local pane count
   pane_info=""
-  if [[ "$panes" -gt 1 ]]; then
-    pane_info="[${panes}]"
+  if [[ "$prefix" != "local" ]]; then
+    local_panes="$panes"
+    remote_count=$(_remote_pane_count "$prefix" "$short")
+    if [[ -n "$remote_count" ]] && [[ "$remote_count" -gt 1 ]]; then
+      pane_info="[${remote_count}]"
+    elif [[ "$local_panes" -gt 1 ]]; then
+      pane_info="[${local_panes}]"
+    fi
+  else
+    if [[ "$panes" -gt 1 ]]; then
+      pane_info="[${panes}]"
+    fi
   fi
 
   if [[ "$active" == "1" ]]; then
