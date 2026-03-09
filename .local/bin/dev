@@ -392,7 +392,7 @@ _generate_tmux_status() {
       label=$(echo "$machine" | tr '[:lower:]' '[:upper:]')
 
       echo "# $label"
-      echo "set -g status-format[$i] \"#[bg=${_BG}] #(~/.local/bin/dev-status ssh-health $machine) #[fg=${color}]${icon} ${label}#[default]#[bg=${_BG}]  #(~/.local/bin/dev-status $machine)#[align=right] \""
+      echo "set -g status-format[$i] \"#[bg=${_BG}] #(~/.local/bin/dev-status ssh-health $machine) #[fg=${color}]${icon} ${label}#[default]#[bg=${_BG}]  #(~/.local/bin/dev-status $machine)#[align=right]#{?#{&&:#{@remote_prefix},#{m:${machine}:*,#{window_name}}},#[fg=${_FG_ACCENT}] C-b #[default],} \""
       echo ""
       i=$((i + 1))
     done
@@ -513,13 +513,11 @@ kill_session() {
   ssh "$host" "tmux kill-session -t '$session' 2>/dev/null && echo 'Killed: $session' || echo 'Session not found: $session'"
 }
 
-# Determine SSH command — prefer autossh if available
+# SSH command for interactive sessions
+# Uses plain ssh — keepalive is configured in ~/.ssh/config
+# autossh doesn't work well with -t (pseudo-terminal) for interactive use
 _ssh_cmd() {
-  if command -v autossh &>/dev/null; then
-    echo "autossh -M 0 -o ServerAliveInterval=30 -o ServerAliveCountMax=5"
-  else
-    echo "ssh"
-  fi
+  echo "ssh"
 }
 
 # Sync dotfiles on remote (background, non-blocking)
