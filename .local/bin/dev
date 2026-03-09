@@ -19,14 +19,14 @@ LOCAL_CACHE_DIR="$HOME/.cache/dev"
 
 # --- Config parsing ---
 
-# Read machines.conf, return lines as: name|host|workspace|icon|color|status
+# Read machines.conf, return lines as: name|host|workspace|icon|color|status|key
 _read_config() {
   [[ -f "$CONF_FILE" ]] || return
   grep -v '^#' "$CONF_FILE" | grep -v '^$'
 }
 
 # Get a field for a machine: _get_field <name> <field_num>
-# Fields: 1=name 2=ssh_host 3=workspace 4=icon 5=color 6=show_on_status
+# Fields: 1=name 2=ssh_host 3=workspace 4=icon 5=color 6=show_on_status 7=key
 _get_field() {
   local name="$1" field="$2"
   _read_config | awk -F'|' -v n="$name" -v f="$field" '$1 == n {gsub(/^[ \t]+|[ \t]+$/, "", $f); print $f}'
@@ -44,17 +44,111 @@ _status_machines() {
 
 # --- Setup wizard ---
 
+# ANSI color helpers
+_c_reset="\033[0m"
+_c_bold="\033[1m"
+_c_dim="\033[2m"
+_c_green="\033[38;2;166;227;161m"
+_c_blue="\033[38;2;122;162;247m"
+_c_yellow="\033[38;2;224;175;104m"
+_c_red="\033[38;2;243;139;168m"
+_c_cyan="\033[38;2;137;220;254m"
+_c_purple="\033[38;2;203;166;247m"
+_c_accent="\033[38;2;149;230;203m"
+
+_banner() {
+  printf "\n"
+  printf "  ${_c_accent}╺━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╸${_c_reset}\n"
+  printf "  ${_c_bold}  ⚡ DEV COMMAND CENTER${_c_reset}\n"
+  printf "  ${_c_dim}      Machine Setup${_c_reset}\n"
+  printf "  ${_c_accent}╺━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╸${_c_reset}\n"
+  printf "\n"
+}
+
+_step() {
+  local num="$1" total="$2" msg="$3"
+  printf "\n  ${_c_blue}[${num}/${total}]${_c_reset} ${_c_bold}${msg}${_c_reset}\n"
+}
+
+_info() {
+  printf "  ${_c_dim}%s${_c_reset}\n" "$1"
+}
+
+_success() {
+  printf "  ${_c_green}✓${_c_reset} %s\n" "$1"
+}
+
+_warn() {
+  printf "  ${_c_yellow}!${_c_reset} %s\n" "$1"
+}
+
+_skip() {
+  printf "  ${_c_dim}─${_c_reset} ${_c_dim}%s${_c_reset}\n" "$1"
+}
+
+_prompt() {
+  local msg="$1" default="$2" var_name="$3"
+  if [[ -n "$default" ]]; then
+    printf "  ${_c_accent}›${_c_reset} ${msg} ${_c_dim}[${default}]${_c_reset} "
+  else
+    printf "  ${_c_accent}›${_c_reset} ${msg} "
+  fi
+  read -r _reply
+  eval "$var_name=\"\${_reply:-$default}\""
+}
+
+_prompt_yn() {
+  local msg="$1" default="$2" var_name="$3"
+  if [[ "$default" == "y" ]]; then
+    printf "  ${_c_accent}›${_c_reset} ${msg} ${_c_green}Y${_c_reset}/${_c_dim}n${_c_reset} "
+  else
+    printf "  ${_c_accent}›${_c_reset} ${msg} ${_c_dim}y${_c_reset}/${_c_green}N${_c_reset} "
+  fi
+  read -r _reply
+  _reply="${_reply:-$default}"
+  eval "$var_name=\"${_reply,,}\""
+}
+
 setup() {
   mkdir -p "$CONF_DIR"
 
-  echo "Dev Command Center — Setup"
-  echo ""
+  _banner
 
-  # Parse SSH config for hosts (skip wildcards, github, etc.)
+  # --- Nerd Font detection ---
+  local use_nerd_fonts=true
+  # Nerd Font icons (Material Design range — known to render with JetBrainsMono NF)
+  local nf_icons=("󰢮" "󰅟" "󰒋" "󱂵" "󰨡" "󰣀" "󰍹" "󰡄")
+  local nf_labels=("GPU card" "Cloud" "Server" "Rocket" "Robot" "Globe" "Monitor" "Chip")
+  # ASCII fallbacks
+  local ascii_icons=("[G]" "[C]" "[S]" "[R]" "[B]" "[W]" "[M]" "[X]")
+
+  printf "  ${_c_dim}Checking font support...${_c_reset}\n"
+  printf "  Do you see icons here? →  ${nf_icons[0]}  ${nf_icons[1]}  ${nf_icons[2]}  ${nf_icons[4]}\n"
+  local nf_check
+  _prompt_yn "Nerd Font icons rendering correctly?" "y" nf_check
+  if [[ "$nf_check" == "n" ]]; then
+    use_nerd_fonts=false
+    _info "Using ASCII fallback icons"
+    _info "Install a Nerd Font for full icon support: https://www.nerdfonts.com"
+  else
+    _success "Nerd Font icons detected"
+  fi
+
+  local icons=()
+  local icon_labels=()
+  if [[ "$use_nerd_fonts" == true ]]; then
+    icons=("${nf_icons[@]}")
+    icon_labels=("${nf_labels[@]}")
+  else
+    icons=("${ascii_icons[@]}")
+    icon_labels=("GPU" "Cloud" "Server" "Rocket" "Robot" "Globe" "Monitor" "Chip")
+  fi
+
+  # --- Step 1: Scan SSH hosts ---
+  printf "\n"
   local ssh_hosts=()
   if [[ -f "$HOME/.ssh/config" ]]; then
     while IFS= read -r host; do
-      # Skip common non-machine hosts
       [[ "$host" == "github.com" ]] && continue
       [[ "$host" == "*" ]] && continue
       [[ -z "$host" ]] && continue
@@ -62,106 +156,235 @@ setup() {
     done < <(grep -i '^Host ' "$HOME/.ssh/config" | awk '{print $2}')
   fi
 
-  if [[ ${#ssh_hosts[@]} -eq 0 ]]; then
-    echo "No SSH hosts found in ~/.ssh/config"
-    echo "Add hosts to ~/.ssh/config first, then run 'dev setup' again."
+  local total=${#ssh_hosts[@]}
+
+  if [[ $total -eq 0 ]]; then
+    printf "\n"
+    printf "  ${_c_yellow}┌─────────────────────────────────────────┐${_c_reset}\n"
+    printf "  ${_c_yellow}│${_c_reset}  No SSH hosts found in ~/.ssh/config    ${_c_yellow}│${_c_reset}\n"
+    printf "  ${_c_yellow}│${_c_reset}                                         ${_c_yellow}│${_c_reset}\n"
+    printf "  ${_c_yellow}│${_c_reset}  ${_c_dim}Add hosts to ~/.ssh/config first,${_c_reset}      ${_c_yellow}│${_c_reset}\n"
+    printf "  ${_c_yellow}│${_c_reset}  ${_c_dim}then run${_c_reset} ${_c_bold}dev setup${_c_reset} ${_c_dim}again.${_c_reset}            ${_c_yellow}│${_c_reset}\n"
+    printf "  ${_c_yellow}└─────────────────────────────────────────┘${_c_reset}\n"
+    printf "\n"
     exit 1
   fi
 
-  echo "Found SSH hosts: ${ssh_hosts[*]}"
-  echo ""
+  printf "  ${_c_dim}Scanned${_c_reset} ~/.ssh/config\n"
+  printf "  ${_c_green}${total}${_c_reset} SSH host(s) found: "
+  printf "${_c_bold}%s${_c_reset}" "${ssh_hosts[0]}"
+  for ((i=1; i<${#ssh_hosts[@]}; i++)); do
+    printf "${_c_dim}, ${_c_reset}${_c_bold}%s${_c_reset}" "${ssh_hosts[$i]}"
+  done
+  printf "\n"
 
   # Load existing config
   declare -A existing_hosts
+  declare -A existing_lines
+  local has_existing=false
   if [[ -f "$CONF_FILE" ]]; then
-    while IFS='|' read -r name host rest; do
-      name=$(echo "$name" | xargs)
-      host=$(echo "$host" | xargs)
-      existing_hosts[$host]="$name"
+    while IFS='|' read -r ename ehost rest; do
+      ename=$(echo "$ename" | xargs)
+      ehost=$(echo "$ehost" | xargs)
+      existing_hosts[$ehost]="$ename"
+      existing_lines[$ehost]="${ename}|${ehost}|${rest}"
     done < <(_read_config)
+    [[ ${#existing_hosts[@]} -gt 0 ]] && has_existing=true
   fi
 
-  # Available icons (Material Design range — known to render)
-  local icons=("󰢮" "󰅟" "󰒋" "󰆍" "󱂵" "󰨡" "󰣀" "󰍹")
+  if [[ "$has_existing" == true ]]; then
+    printf "  ${_c_cyan}${#existing_hosts[@]}${_c_reset} machine(s) already configured\n"
+  fi
+
   local colors=("#a6e3a1" "#7aa2f7" "#e0af68" "#f38ba8" "#cba6f7" "#89dcfe" "#fab387" "#94e2d5")
   local icon_idx=0
 
   # Build new config
   local new_lines=()
   new_lines+=("# Dev Command Center - Machine Configuration")
-  new_lines+=("# Format: name|ssh_host|workspace|icon|color|show_on_status")
+  new_lines+=("# Format: name|ssh_host|workspace|icon|color|show_on_status|key")
   new_lines+=("")
 
-  for host in "${ssh_hosts[@]}"; do
-    echo "───────────────────────"
-    echo "SSH host: $host"
+  # Track configured machines for summary
+  local configured_names=()
+  local configured_hosts=()
+  local configured_keys=()
+  local configured_icons=()
 
-    # Check if already configured
+  # --- Step 2: Configure each host ---
+  local host_num=0
+  for host in "${ssh_hosts[@]}"; do
+    host_num=$((host_num + 1))
+
+    _step "$host_num" "$total" "SSH host: ${host}"
+
+    # Already configured?
     if [[ -n "${existing_hosts[$host]:-}" ]]; then
       local existing_name="${existing_hosts[$host]}"
-      echo "  Already configured as: $existing_name"
-      read -r -p "  Keep existing config? [Y/n] " keep
-      if [[ "${keep,,}" != "n" ]]; then
-        # Preserve existing line
-        local existing_line
-        existing_line=$(_read_config | grep "|${host}|" | head -1)
-        new_lines+=("$existing_line")
+      _info "Already configured as \"${existing_name}\""
+
+      local keep_it
+      _prompt_yn "Keep existing config?" "y" keep_it
+      if [[ "$keep_it" != "n" ]]; then
+        new_lines+=("${existing_lines[$host]}")
+        local ekey eicon
+        ekey=$(echo "${existing_lines[$host]}" | awk -F'|' '{print $7}')
+        eicon=$(echo "${existing_lines[$host]}" | awk -F'|' '{print $4}')
+        configured_names+=("$existing_name")
+        configured_hosts+=("$host")
+        configured_keys+=("$ekey")
+        configured_icons+=("$eicon")
+        _success "Kept ${_c_bold}${existing_name}${_c_reset}"
         continue
       fi
     fi
 
-    read -r -p "  Add this machine? [y/N] " add
-    if [[ "${add,,}" != "y" ]]; then
+    local add_it
+    _prompt_yn "Add this machine?" "n" add_it
+    if [[ "$add_it" != "y" ]]; then
+      _skip "Skipped ${host}"
       continue
     fi
 
-    read -r -p "  Friendly name (e.g. gpu, aws, prod): " name
-    [[ -z "$name" ]] && continue
+    printf "\n"
+    local name=""
+    _prompt "Friendly name ${_c_dim}(e.g. gpu, aws, prod)${_c_reset}" "" name
+    [[ -z "$name" ]] && { _skip "Skipped (no name)"; continue; }
 
-    read -r -p "  Workspace path [~/workspace]: " workspace
-    workspace="${workspace:-~/workspace}"
+    local workspace=""
+    _prompt "Workspace path" "~/workspace" workspace
 
-    # Auto-assign icon and color
+    # Icon picker
+    local default_icon_idx=$((icon_idx % ${#icons[@]}))
+    printf "\n"
+    printf "  ${_c_dim}Pick an icon:${_c_reset}\n"
+    for ((j=0; j<${#icons[@]}; j++)); do
+      if [[ $j -eq $default_icon_idx ]]; then
+        printf "    ${_c_accent}%d)${_c_reset} ${_c_bold}%s${_c_reset}  %s ${_c_dim}← default${_c_reset}\n" "$((j+1))" "${icons[$j]}" "${icon_labels[$j]}"
+      else
+        printf "    ${_c_dim}%d)${_c_reset} %s  ${_c_dim}%s${_c_reset}\n" "$((j+1))" "${icons[$j]}" "${icon_labels[$j]}"
+      fi
+    done
+    local icon_choice=""
+    _prompt "Icon" "$((default_icon_idx+1))" icon_choice
+    # Validate: must be 1-N
+    if [[ "$icon_choice" =~ ^[0-9]+$ ]] && [[ "$icon_choice" -ge 1 ]] && [[ "$icon_choice" -le ${#icons[@]} ]]; then
+      icon_idx=$((icon_choice - 1))
+    fi
     local icon="${icons[$icon_idx % ${#icons[@]}]}"
     local color="${colors[$icon_idx % ${#colors[@]}]}"
     icon_idx=$((icon_idx + 1))
 
-    read -r -p "  Show on tmux status bar? [Y/n] " show
-    show=$([[ "${show,,}" == "n" ]] && echo "false" || echo "true")
+    local show_it
+    _prompt_yn "Show on tmux status bar?" "y" show_it
+    local show=$([[ "$show_it" == "n" ]] && echo "false" || echo "true")
 
-    new_lines+=("${name}|${host}|${workspace}|${icon}|${color}|${show}")
-    echo "  Added: $name → $host"
+    local default_key="${name:0:1}"
+    local key=""
+    _prompt "Quick-access key ${_c_dim}(tmux: C-a <key>, shell: d<key>)${_c_reset}" "$default_key" key
+
+    new_lines+=("${name}|${host}|${workspace}|${icon}|${color}|${show}|${key}")
+    configured_names+=("$name")
+    configured_hosts+=("$host")
+    configured_keys+=("$key")
+    configured_icons+=("$icon")
+
+    printf "\n"
+    _success "${icon} ${_c_bold}${name}${_c_reset} → ${host}  ${_c_dim}(C-a ${key} · d${key})${_c_reset}"
   done
 
-  echo ""
+  # --- Step 3: Write config & generate ---
+  printf "\n"
+  printf "  ${_c_accent}╺━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╸${_c_reset}\n"
+  printf "\n"
 
   # Write config
   printf '%s\n' "${new_lines[@]}" > "$CONF_FILE"
-  echo "Config saved to $CONF_FILE"
 
-  # Regenerate tmux status config
-  _generate_tmux_status
+  if [[ ${#configured_names[@]} -eq 0 ]]; then
+    _warn "No machines configured. Run ${_c_bold}dev setup${_c_reset} again to add machines."
+    printf "\n"
+    exit 0
+  fi
 
-  echo ""
-  echo "Done! Reload tmux: tmux source-file ~/.config/tmux/tmux.local.conf"
+  # Regenerate tmux status + aliases
+  _generate_tmux_status > /dev/null 2>&1
+
+  # --- Summary table ---
+  printf "  ${_c_bold}Configured Machines${_c_reset}\n"
+  printf "\n"
+  printf "  ${_c_dim}  %-10s %-12s %-6s %-10s %-10s${_c_reset}\n" "NAME" "HOST" "KEY" "TMUX" "SHELL"
+  printf "  ${_c_dim}  %-10s %-12s %-6s %-10s %-10s${_c_reset}\n" "────" "────" "───" "────" "─────"
+
+  for ((i=0; i<${#configured_names[@]}; i++)); do
+    local n="${configured_names[$i]}"
+    local h="${configured_hosts[$i]}"
+    local k="${configured_keys[$i]}"
+    local ic="${configured_icons[$i]}"
+    printf "  ${ic} ${_c_green}%-10s${_c_reset} %-12s ${_c_cyan}%-6s${_c_reset} ${_c_purple}C-a %-5s${_c_reset} ${_c_yellow}d%-9s${_c_reset}\n" \
+      "$n" "$h" "$k" "$k" "$k"
+  done
+
+  # --- Launch ---
+  printf "\n"
+  printf "  ${_c_accent}╺━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╸${_c_reset}\n"
+  printf "\n"
+
+  _success "Config saved and status bar generated"
+  printf "\n"
+
+  # Source aliases into current shell if interactive
+  if [[ -f "$CONF_DIR/aliases.sh" ]]; then
+    # Can't source directly in set -e script, but print instruction
+    _info "Shell aliases written to ~/.config/dev/aliases.sh"
+  fi
+
+  if [[ -n "${TMUX:-}" ]]; then
+    # Already inside tmux — reload config
+    _info "Reloading tmux config..."
+    tmux source-file "$HOME/.config/tmux/tmux.local.conf" 2>/dev/null && \
+      _success "Tmux reloaded — status bar is live" || \
+      _warn "Could not reload tmux config"
+    printf "\n"
+    printf "  ${_c_dim}Run${_c_reset} ${_c_bold}source ~/.config/dev/aliases.sh${_c_reset} ${_c_dim}to load shell aliases${_c_reset}\n"
+    printf "  ${_c_dim}Then try:${_c_reset} ${_c_bold}dev ${configured_names[0]}${_c_reset}  ${_c_dim}or${_c_reset}  ${_c_bold}d${configured_keys[0]}${_c_reset}\n"
+  else
+    # Not in tmux — launch command center
+    printf "  ${_c_dim}Launching command center...${_c_reset}\n"
+    printf "\n"
+    exec tmux -f "$HOME/.config/tmux/tmux.local.conf" new-session -A -s command-center -c "$HOME"
+  fi
+  printf "\n"
 }
 
-# Generate tmux status-format lines from config
+# Hardcoded theme colors (tmux variable expansion is unreliable)
+_BG="#0B0E14"
+_FG_DIM="#475266"
+_FG_ACCENT="#95E6CB"
+_FG_DOT="#333842"
+_HEALTH_OK="#a6e3a1"
+_LOCAL_COLOR="#e0af68"
+
+# Generate tmux status-format lines, keybindings, and shell aliases from config
 _generate_tmux_status() {
   local status_file="$CONF_DIR/tmux-status.conf"
-  local machines=()
-  mapfile -t machines < <(_status_machines)
-  local count=${#machines[@]}
+  local aliases_file="$CONF_DIR/aliases.sh"
+  local all_machines=()
+  mapfile -t all_machines < <(_list_machines)
+  local status_machines=()
+  mapfile -t status_machines < <(_status_machines)
+  local count=${#status_machines[@]}
 
+  # --- tmux-status.conf (status lines + keybindings) ---
   {
-    echo "# Auto-generated by 'dev setup' — do not edit manually"
+    echo "# Auto-generated — do not edit manually"
     echo "# Regenerate with: dev setup"
     echo ""
     echo "set -g status $((count + 1))"
     echo ""
 
     local i=0
-    for machine in "${machines[@]}"; do
+    for machine in "${status_machines[@]}"; do
       local icon color
       icon=$(_get_field "$machine" 4)
       color=$(_get_field "$machine" 5)
@@ -169,17 +392,47 @@ _generate_tmux_status() {
       label=$(echo "$machine" | tr '[:lower:]' '[:upper:]')
 
       echo "# $label"
-      echo "set -g status-format[$i] \"#[bg=\${BG}] #(~/.local/bin/dev-status ssh-health $machine) #[fg=${color}]${icon} ${label}#[default]#[bg=\${BG}]  #(~/.local/bin/dev-status $machine)#[align=right] \""
+      echo "set -g status-format[$i] \"#[bg=${_BG}] #(~/.local/bin/dev-status ssh-health $machine) #[fg=${color}]${icon} ${label}#[default]#[bg=${_BG}]  #(~/.local/bin/dev-status $machine)#[align=right] \""
       echo ""
       i=$((i + 1))
     done
 
     # Local line (always last)
     echo "# HOME (local)"
-    echo "set -g status-format[$i] \"#[bg=\${BG}] #[fg=\${HEALTH_OK}]●#[default]#[bg=\${BG}] #[fg=\${LOCAL_COLOR}]󰆍 HOME#[default]#[bg=\${BG}]  #(~/.local/bin/dev-status local)#[align=right]#{?client_prefix,#[fg=\${FG_ACCENT}] C-a #[default],}#[fg=\${FG_DIM}]%H:%M #[fg=\${FG_DOT}]%a %-d %b \""
+    echo "set -g status-format[$i] \"#[bg=${_BG}] #[fg=${_HEALTH_OK}]●#[default]#[bg=${_BG}] #[fg=${_LOCAL_COLOR}]󰆍 HOME#[default]#[bg=${_BG}]  #(~/.local/bin/dev-status local)#[align=right]#{?client_prefix,#[fg=${_FG_ACCENT}] C-a #[default],}#[fg=${_FG_DIM}]%H:%M #[fg=${_FG_DOT}]%a %-d %b \""
+    echo ""
+
+    # Keybindings (C-a <key> for each machine)
+    echo "# Quick-access keybindings"
+    for machine in "${all_machines[@]}"; do
+      local key
+      key=$(_get_field "$machine" 7)
+      if [[ -n "$key" ]]; then
+        echo "bind ${key} run-shell \"~/.local/bin/dev ${machine}\""
+      fi
+    done
   } > "$status_file"
 
   echo "Generated tmux status config: $status_file"
+
+  # --- aliases.sh (shell aliases) ---
+  {
+    echo "# Auto-generated — do not edit manually"
+    echo "# Regenerate with: dev setup"
+    echo ""
+    for machine in "${all_machines[@]}"; do
+      local key
+      key=$(_get_field "$machine" 7)
+      if [[ -n "$key" ]]; then
+        echo "alias d${key}=\"dev ${machine}\""
+        echo "alias d${key}c=\"dev ${machine} --claude\""
+        echo "alias d${key}l=\"dev ${machine} --list\""
+        echo "alias d${key}r=\"dev ${machine} --repos\""
+      fi
+    done
+  } > "$aliases_file"
+
+  echo "Generated shell aliases: $aliases_file"
 }
 
 # --- Core functions ---
@@ -260,6 +513,21 @@ kill_session() {
   ssh "$host" "tmux kill-session -t '$session' 2>/dev/null && echo 'Killed: $session' || echo 'Session not found: $session'"
 }
 
+# Determine SSH command — prefer autossh if available
+_ssh_cmd() {
+  if command -v autossh &>/dev/null; then
+    echo "autossh -M 0 -o ServerAliveInterval=30 -o ServerAliveCountMax=5"
+  else
+    echo "ssh"
+  fi
+}
+
+# Sync dotfiles on remote (background, non-blocking)
+_sync_dotfiles_remote() {
+  local host="$1"
+  ssh "$host" 'if [ -d "$HOME/dotfiles" ]; then /usr/bin/git --git-dir="$HOME/dotfiles" --work-tree="$HOME" pull --ff-only 2>/dev/null; fi' &>/dev/null &
+}
+
 connect() {
   local machine="$1"
   local host="$2"
@@ -274,8 +542,9 @@ connect() {
     setup_cmd="cd ${start_dir} && "
   fi
 
-  # Refresh repo cache in background
+  # Refresh repo cache and sync dotfiles in background
   (refresh_cache "$machine" "$host" &) >/dev/null 2>&1
+  (_sync_dotfiles_remote "$host" &) >/dev/null 2>&1
 
   local remote_cmd="tmux new-session -A -s '${session}'"
   if [[ -n "$start_dir" ]] || [[ -n "$post_cmd" ]]; then
@@ -283,16 +552,18 @@ connect() {
     remote_cmd="tmux new-session -A -s '${session}' -c '${start_dir:-\$HOME}' \\; send-keys '${send_cmd}' Enter"
   fi
 
+  local ssh=$(_ssh_cmd)
+
   if [[ -n "${TMUX:-}" ]]; then
     local existing
-    existing=$(tmux list-windows -F '#{window_index}|#{window_name}' 2>/dev/null | grep "|${window_name}$" | head -1 | cut -d'|' -f1)
+    existing=$(tmux list-windows -F '#{window_index}|#{window_name}' 2>/dev/null | grep "|${window_name}$" | head -1 | cut -d'|' -f1 || true)
     if [[ -n "$existing" ]]; then
       tmux select-window -t "$existing"
     else
-      tmux new-window -n "$window_name" "ssh -t $host \"$remote_cmd\""
+      tmux new-window -n "$window_name" "$ssh -t $host \"$remote_cmd\""
     fi
   else
-    ssh -t "$host" "$remote_cmd"
+    $ssh -t "$host" "$remote_cmd"
   fi
 }
 
@@ -301,7 +572,7 @@ connect() {
 main() {
   # Ensure config exists
   if [[ ! -f "$CONF_FILE" ]]; then
-    echo "No machine config found. Running setup..."
+    printf "\033[2m  No machine config found — launching setup...\033[0m\n"
     setup
     exit 0
   fi
