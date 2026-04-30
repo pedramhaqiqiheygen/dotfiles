@@ -52,6 +52,33 @@ _all_prefixes() {
   grep -v '^#' "$CONF_FILE" | grep -v '^$' | awk -F'|' '{gsub(/^[ \t]+|[ \t]+$/, "", $1); print $1}'
 }
 
+# Map a machine name to its (active, inactive) color pair.
+# stdout: two hex colors separated by a space — "<active> <inactive>"
+_machine_color() {
+  case "$1" in
+    gpu)   printf '%s %s' "$GPU" "$GPU_DIM" ;;
+    aws)   printf '%s %s' "$AWS" "$AWS_DIM" ;;
+    local) printf '%s %s' "$LOCAL" "$LOCAL_DIM" ;;
+    *)     printf '%s %s' "$FG_ACTIVE" "$FG_DIM" ;;
+  esac
+}
+
+# Echo the machine name that owns the currently focused window, or "local"
+# if no machine prefix matches. Used to decide which row gets the filled bullet.
+_active_machine() {
+  local active_name
+  active_name=$(tmux display-message -p '#{window_name}' 2>/dev/null) || return
+  local p
+  while IFS= read -r p; do
+    [[ -z "$p" ]] && continue
+    if [[ "$active_name" == "${p}:"* ]]; then
+      printf '%s' "$p"
+      return
+    fi
+  done < <(_all_prefixes)
+  printf 'local'
+}
+
 # --- Non-blocking background refresh helper ---
 # Usage: _bg_refresh <cache_key> <ttl_seconds> <command...>
 # Always returns cached value immediately. Refreshes in background if stale.
