@@ -211,33 +211,9 @@ _remote_pane_count() {
 # Renders tabs for one row (machine prefix or "local"). Indices are per-row,
 # starting at 1 within each render. Output uses tmux #[...] sequences only.
 #
-# Side effect: writes /tmp/dev-status-cache/clickmap-<row> with one record per
-# rendered tab: "<start_col>|<end_col>|<global_window_idx>". Columns are
-# 0-based and refer to character positions in the rendered string AFTER the
-# row's static prefix (status-bullet + icon + label + leading spaces, which
-# tmux's status-format string produces, not us). The static prefix width is
-# hardcoded in dev-click; see that script for the offset.
-
-# Resolve which clickmap file to write. Map machine -> row index.
-_clickmap_path_for() {
-  local prefix="$1"
-  local i=0
-  local p
-  while IFS= read -r p; do
-    [[ -z "$p" ]] && continue
-    if [[ "$p" == "$prefix" ]]; then
-      printf '%s/clickmap-%d' "$CACHE_DIR" "$i"
-      return
-    fi
-    i=$((i + 1))
-  done < <(_all_prefixes)
-  # Local row is always last
-  printf '%s/clickmap-%d' "$CACHE_DIR" "$i"
-}
-
-clickmap_file=$(_clickmap_path_for "$prefix")
-clickmap_tmp="${clickmap_file}.tmp"
-: > "$clickmap_tmp"
+# Each tab is wrapped in #[range=user|<global_idx>]...#[norange] so tmux
+# itself resolves mouse clicks via #{mouse_status_range} — no manual
+# column-to-tab mapping needed.
 
 # Resolve active/inactive colors for the row
 read -r row_active_color row_inactive_color < <(_machine_color "$prefix")
@@ -258,13 +234,11 @@ prefixes=()
 mapfile -t prefixes < <(_all_prefixes)
 
 per_row_idx=0
-col=0
 first=true
 has_windows=false
 
-# Tab separator: four spaces
+# Tab separator: four spaces (rendered outside any range, so clicks fall through)
 SEP="    "
-SEP_W=4
 
 while IFS='|' read -r idx name active panes; do
   # Filter by row
@@ -288,7 +262,6 @@ while IFS='|' read -r idx name active panes; do
     first=false
   else
     printf '%s' "$SEP"
-    col=$((col + SEP_W))
   fi
 
   # Resolve pane count to display
@@ -304,18 +277,13 @@ while IFS='|' read -r idx name active panes; do
     [[ "$panes" -gt 1 ]] && pane_info="[${panes}]"
   fi
 
-  # Compute visible widths
   idx_str="$per_row_idx"
-  idx_w=${#idx_str}
-  name_w=${#short}
-  pane_w=${#pane_info}
-  # tab format: "<idx> <name>[panes]" (one space between idx and name, no space before [)
-  tab_visible_w=$((idx_w + 1 + name_w + pane_w))
 
-  start_col=$col
-  end_col=$((col + tab_visible_w))
+  # Open clickable range — tmux resolves clicks via #{mouse_status_range}.
+  # We use type "user" with the global window idx as the value.
+  printf '#[range=user|%s]' "$idx"
 
-  # Emit tab
+  # Emit tab body
   if [[ "$active" == "1" && "$row_is_active" == true ]]; then
     # Active window in active machine row: bold + accent underline
     printf '#[fg=%s]%s #[fg=%s,bold,underscore]%s#[default]' \
@@ -333,16 +301,11 @@ while IFS='|' read -r idx name active panes; do
     [[ -n "$pane_info" ]] && printf '#[fg=%s]%s#[default]' "$FG_DOT" "$pane_info"
   fi
 
-  # Record clickmap entry
-  printf '%d|%d|%s\n' "$start_col" "$end_col" "$idx" >> "$clickmap_tmp"
-
-  col=$end_col
+  # Close range
+  printf '#[norange]'
 done < <(tmux list-windows -F '#{window_index}|#{window_name}|#{window_active}|#{window_panes}' 2>/dev/null)
 
 # If no windows, render em-dash placeholder
 if [[ "$has_windows" != true ]]; then
   printf '#[fg=%s]—#[default]' "$FG_DOT"
 fi
-
-# Atomically install clickmap
-mv -f "$clickmap_tmp" "$clickmap_file" 2>/dev/null
