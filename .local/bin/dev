@@ -409,6 +409,18 @@ _generate_tmux_status() {
       echo "bind ${d} run-shell \"~/.local/bin/dev-jump-current ${d}\""
     done
     echo ""
+    # Launchers (uppercase): C-a G / C-a A → dev gpu / dev aws (main session)
+    echo "# Launch dev <machine> for the \"main\" remote session: C-a <UPPER>"
+    for machine in "${all_machines[@]}"; do
+      local key
+      key=$(_get_field "$machine" 7)
+      if [[ -n "$key" ]]; then
+        local upper
+        upper=$(printf '%s' "$key" | tr '[:lower:]' '[:upper:]')
+        echo "bind ${upper} run-shell \"~/.local/bin/dev ${machine}\""
+      fi
+    done
+    echo ""
     echo "# Cross-row jump: C-a g 4 = 4th gpu, C-a a 2 = 2nd aws, C-a h 1 = 1st home"
     for machine in "${all_machines[@]}"; do
       local key
@@ -418,6 +430,9 @@ _generate_tmux_status() {
       fi
     done
     echo "bind h command-prompt -1 -p \"home#:\" \"run-shell '~/.local/bin/dev-jump local %%'\""
+    echo ""
+    echo "# Keyboard preview: C-a P prompts for digit, peeks at Nth tab in current row"
+    echo "bind P command-prompt -1 -p \"preview#:\" \"run-shell '~/.local/bin/dev-preview %%'\""
   } > "$status_file"
 
   echo "Generated tmux status config: $status_file"
