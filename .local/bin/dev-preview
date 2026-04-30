@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # dev-preview <per-row-idx>
-# Shows a popup with the last 50 lines of the Nth tab in the focused machine's row.
-# Does NOT switch focus — peek without leaving your current window.
+# Pops up a preview of the Nth tab in the focused machine's row.
 
 set -u
 
@@ -23,13 +22,14 @@ if [[ -f "$CONF_FILE" ]]; then
   done < <(grep -v '^#' "$CONF_FILE" | grep -v '^$' | awk -F'|' '{gsub(/^[ \t]+|[ \t]+$/, "", $1); print $1}')
 fi
 
-# Resolve Nth window in that row → global idx
+# Resolve Nth window in that row → global idx + name
 prefixes=()
 if [[ -f "$CONF_FILE" ]]; then
   mapfile -t prefixes < <(grep -v '^#' "$CONF_FILE" | grep -v '^$' | awk -F'|' '{gsub(/^[ \t]+|[ \t]+$/, "", $1); print $1}')
 fi
 
-target_global_idx=""
+target_idx=""
+target_name=""
 n=0
 while IFS='|' read -r global_idx name; do
   if [[ "$machine" == "local" ]]; then
@@ -43,12 +43,24 @@ while IFS='|' read -r global_idx name; do
   fi
   n=$((n + 1))
   if [[ "$n" -eq "$idx" ]]; then
-    target_global_idx="$global_idx"
+    target_idx="$global_idx"
+    target_name="$name"
     break
   fi
 done < <(tmux list-windows -F '#{window_index}|#{window_name}' 2>/dev/null)
 
-[[ -z "$target_global_idx" ]] && exit 0
+[[ -z "$target_idx" ]] && exit 0
 
-tmux display-popup -w 80% -h 60% -E \
-  "tmux capture-pane -p -t '$target_global_idx' -S -50 | less +G" 2>/dev/null
+# Capture pane to temp file (full scrollback + colors), strip leading blanks,
+# fall back to a placeholder when truly empty. less -R passes ANSI;
+# --quit-if-one-screen auto-exits on tiny content (no "Esc" prompt).
+tmp=$(mktemp -t dev-preview.XXXXXX)
+trap 'rm -f "$tmp"' EXIT INT TERM
+
+tmux capture-pane -p -e -t "$target_idx" -S - -E - 2>/dev/null \
+  | awk 'NF{p=1} p' > "$tmp"
+
+[[ ! -s "$tmp" ]] && printf '(empty pane — no recent output)\n' > "$tmp"
+
+tmux display-popup -T " $target_name " -w 80% -h 60% -E \
+  "less -R --quit-if-one-screen --no-init '$tmp'"

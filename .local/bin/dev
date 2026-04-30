@@ -421,18 +421,33 @@ _generate_tmux_status() {
       fi
     done
     echo ""
-    echo "# Cross-row jump: C-a g 4 = 4th gpu, C-a a 2 = 2nd aws, C-a h 1 = 1st home"
+    # Silent key tables (no command-prompt, no yellow flash) for cross-row jumps.
+    echo "# Cross-row jump via silent key tables (no command-prompt flash):"
+    echo "# C-a g 4 = 4th gpu, C-a a 2 = 2nd aws, C-a h 1 = 1st home"
     for machine in "${all_machines[@]}"; do
       local key
       key=$(_get_field "$machine" 7)
-      if [[ -n "$key" ]]; then
-        echo "bind ${key} command-prompt -1 -p \"${machine}#:\" \"run-shell '~/.local/bin/dev-jump ${machine} %%'\""
-      fi
+      [[ -z "$key" ]] && continue
+      echo "bind ${key} switch-client -T jump_${machine}"
+      for d in 1 2 3 4 5 6 7 8 9; do
+        echo "bind -T jump_${machine} ${d} run-shell \"~/.local/bin/dev-jump ${machine} ${d}\""
+      done
+      echo "bind -T jump_${machine} Any switch-client -T root"
     done
-    echo "bind h command-prompt -1 -p \"home#:\" \"run-shell '~/.local/bin/dev-jump local %%'\""
+    # Home jump table
+    echo "bind h switch-client -T jump_home"
+    for d in 1 2 3 4 5 6 7 8 9; do
+      echo "bind -T jump_home ${d} run-shell \"~/.local/bin/dev-jump local ${d}\""
+    done
+    echo "bind -T jump_home Any switch-client -T root"
     echo ""
-    echo "# Keyboard preview: C-a P prompts for digit, peeks at Nth tab in current row"
-    echo "bind P command-prompt -1 -p \"preview#:\" \"run-shell '~/.local/bin/dev-preview %%'\""
+    echo "# Keyboard preview: C-a p <digit> peeks at Nth tab in current row (silent table)."
+    echo "# Cross-row preview: C-a B (existing) opens fzf gallery with all windows + previews."
+    echo "bind p switch-client -T preview_current"
+    for d in 1 2 3 4 5 6 7 8 9; do
+      echo "bind -T preview_current ${d} run-shell \"~/.local/bin/dev-preview ${d}\""
+    done
+    echo "bind -T preview_current Any switch-client -T root"
   } > "$status_file"
 
   echo "Generated tmux status config: $status_file"
