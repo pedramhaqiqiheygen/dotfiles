@@ -18,6 +18,18 @@ FG_ACCENT="#95E6CB"
 FG_DOT="#333842"
 FG_IDX="#5c6370"
 
+# Machine colors (active / inactive)
+GPU="#a6e3a1"
+GPU_DIM="#5d8758"
+AWS="#7aa2f7"
+AWS_DIM="#46618f"
+LOCAL="#e0af68"
+LOCAL_DIM="#856839"
+
+# Health
+OK="#a6e3a1"
+ERR="#f38ba8"
+
 prefix="$1"
 if [[ -z "$prefix" ]]; then
   exit 0
