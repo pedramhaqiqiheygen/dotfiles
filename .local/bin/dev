@@ -392,25 +392,37 @@ _generate_tmux_status() {
       label=$(echo "$machine" | tr '[:lower:]' '[:upper:]')
 
       echo "# $label"
-      echo "set -g status-format[$i] \"#[bg=${_BG}] #(~/.local/bin/dev-status ssh-health $machine) #[fg=${color}]${icon} ${label}#[default]#[bg=${_BG}]  #(~/.local/bin/dev-status $machine)#[align=right]#{?#{&&:#{@remote_prefix},#{m:${machine}:*,#{window_name}}},#[fg=${_FG_ACCENT}] C-b #[default],} \""
+      echo "set -g status-format[$i] \"#[bg=${_BG}] #(~/.local/bin/dev-status status-bullet $machine) #[fg=${color}]${icon} ${label}#[default]#[bg=${_BG}]  #(~/.local/bin/dev-status $machine)#[align=right]#{?#{&&:#{@remote_prefix},#{m:${machine}:*,#{window_name}}},#[fg=${_FG_ACCENT}] C-b #[default],} \""
       echo ""
       i=$((i + 1))
     done
 
     # Local line (always last)
     echo "# HOME (local)"
-    echo "set -g status-format[$i] \"#[bg=${_BG}] #[fg=${_HEALTH_OK}]●#[default]#[bg=${_BG}] #[fg=${_LOCAL_COLOR}]󰆍 HOME#[default]#[bg=${_BG}]  #(~/.local/bin/dev-status local)#[align=right]#{?client_prefix,#[fg=${_FG_ACCENT}] C-a #[default],}#[fg=${_FG_DIM}]%H:%M #[fg=${_FG_DOT}]%a %-d %b \""
+    echo "set -g status-format[$i] \"#[bg=${_BG}] #(~/.local/bin/dev-status status-bullet local) #[fg=${_LOCAL_COLOR}]󰆍 HOME#[default]#[bg=${_BG}]  #(~/.local/bin/dev-status local)#[align=right]#{?client_prefix,#[fg=${_FG_ACCENT}] C-a #[default],}#[fg=${_FG_DIM}]%H:%M #[fg=${_FG_DOT}]%a %-d %b \""
     echo ""
 
-    # Keybindings (C-a <key> for each machine)
-    echo "# Quick-access keybindings"
+    # Keybindings
+    echo "# Launch dev <machine> (uppercase)"
     for machine in "${all_machines[@]}"; do
       local key
       key=$(_get_field "$machine" 7)
       if [[ -n "$key" ]]; then
-        echo "bind ${key} run-shell \"~/.local/bin/dev ${machine}\""
+        local upper
+        upper=$(printf '%s' "$key" | tr '[:lower:]' '[:upper:]')
+        echo "bind ${upper} run-shell \"~/.local/bin/dev ${machine}\""
       fi
     done
+    echo ""
+    echo "# Per-row window jump (lowercase): C-a g 4 = 4th gpu window, etc."
+    for machine in "${all_machines[@]}"; do
+      local key
+      key=$(_get_field "$machine" 7)
+      if [[ -n "$key" ]]; then
+        echo "bind ${key} command-prompt -1 -p \"${machine}#:\" \"run-shell '~/.local/bin/dev-jump ${machine} %%'\""
+      fi
+    done
+    echo "bind h command-prompt -1 -p \"home#:\" \"run-shell '~/.local/bin/dev-jump local %%'\""
   } > "$status_file"
 
   echo "Generated tmux status config: $status_file"
@@ -544,10 +556,14 @@ connect() {
   (refresh_cache "$machine" "$host" &) >/dev/null 2>&1
   (_sync_dotfiles_remote "$host" &) >/dev/null 2>&1
 
-  local remote_cmd="tmux new-session -A -s '${session}'"
+  # Only send startup commands when creating a NEW session (not reattaching)
+  # Check if session exists first, then either attach or create-with-commands
+  local remote_cmd
   if [[ -n "$start_dir" ]] || [[ -n "$post_cmd" ]]; then
     local send_cmd="${setup_cmd}${post_cmd}"
-    remote_cmd="tmux new-session -A -s '${session}' -c '${start_dir:-\$HOME}' \\; send-keys '${send_cmd}' Enter"
+    remote_cmd="tmux has-session -t '${session}' 2>/dev/null && tmux attach-session -t '${session}' || tmux new-session -s '${session}' -c '${start_dir:-\$HOME}' \\; send-keys '${send_cmd}' Enter"
+  else
+    remote_cmd="tmux new-session -A -s '${session}'"
   fi
 
   local ssh=$(_ssh_cmd)
@@ -558,7 +574,19 @@ connect() {
     if [[ -n "$existing" ]]; then
       tmux select-window -t "$existing"
     else
-      tmux new-window -n "$window_name" "$ssh -t $host \"$remote_cmd\""
+      local log_file="$HOME/.cache/dev/connections.log"
+      mkdir -p "$HOME/.cache/dev"
+      # Auto-reconnect loop: retries on SSH failure (exit 255), stops on clean exit (0) or user interrupt
+      tmux new-window -n "$window_name" "\
+        while true; do \
+          echo \"[\$(date '+%Y-%m-%d %H:%M:%S')] CONNECT ${window_name} → ${host}\" >> ${log_file}; \
+          $ssh -t $host \"$remote_cmd\"; \
+          rc=\$?; \
+          echo \"[\$(date '+%Y-%m-%d %H:%M:%S')] DISCONNECT ${window_name} (exit=\$rc)\" >> ${log_file}; \
+          if [ \$rc -eq 0 ]; then break; fi; \
+          echo 'Connection lost (exit='\$rc'). Reconnecting in 3s... (Ctrl-C to stop)'; \
+          sleep 3; \
+        done"
     fi
   else
     $ssh -t "$host" "$remote_cmd"
