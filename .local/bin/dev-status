@@ -125,6 +125,36 @@ _bg_refresh() {
   fi
 }
 
+# --- Status bullet (active/inactive + health) ---
+# Combined indicator: filled ● if this machine owns the focused window, hollow ◯ otherwise.
+# Color = machine color (active state) or DIM (inactive state); ERR red overrides if SSH down.
+if [[ "$prefix" == "status-bullet" ]]; then
+  machine="$2"
+  read -r active_color inactive_color < <(_machine_color "$machine")
+
+  active_machine=$(_active_machine)
+  if [[ "$machine" == "$active_machine" ]]; then
+    glyph="●"
+    color="$active_color"
+  else
+    glyph="◯"
+    color="$inactive_color"
+  fi
+
+  # Override with ERR red if a real SSH probe says the machine is down.
+  # (Local "machine" never has a host, so it is never marked as ERR.)
+  host=$(_get_host "$machine")
+  if [[ -n "$host" ]]; then
+    health_cache="$CACHE_DIR/health-${machine}"
+    if [[ -f "$health_cache" ]] && grep -q '#f38ba8' "$health_cache"; then
+      color="$ERR"
+    fi
+  fi
+
+  printf '#[fg=%s]%s#[default]' "$color" "$glyph"
+  exit 0
+fi
+
 # --- SSH health check ---
 if [[ "$prefix" == "ssh-health" ]]; then
   machine="$2"
