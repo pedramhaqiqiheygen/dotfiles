@@ -402,19 +402,14 @@ _generate_tmux_status() {
     echo "set -g status-format[$i] \"#[bg=${_BG}] #(~/.local/bin/dev-status status-bullet local) #[fg=${_LOCAL_COLOR}]󰆍 HOME#[default]#[bg=${_BG}]  #(~/.local/bin/dev-status local)#[align=right]#{?client_prefix,#[fg=${_FG_ACCENT}] C-a #[default],}#[fg=${_FG_DIM}]%H:%M #[fg=${_FG_DOT}]%a %-d %b \""
     echo ""
 
-    # Keybindings
-    echo "# Launch dev <machine> (uppercase)"
-    for machine in "${all_machines[@]}"; do
-      local key
-      key=$(_get_field "$machine" 7)
-      if [[ -n "$key" ]]; then
-        local upper
-        upper=$(printf '%s' "$key" | tr '[:lower:]' '[:upper:]')
-        echo "bind ${upper} run-shell \"~/.local/bin/dev ${machine}\""
-      fi
+    # Per-row jump within the CURRENT machine row: C-a 1..9 = nth tab of focused machine
+    echo "# Per-row jump within the CURRENT machine row: C-a 1..9 = nth tab of focused machine"
+    local d
+    for d in 1 2 3 4 5 6 7 8 9; do
+      echo "bind ${d} run-shell \"~/.local/bin/dev-jump-current ${d}\""
     done
     echo ""
-    echo "# Per-row window jump (lowercase): C-a g 4 = 4th gpu window, etc."
+    echo "# Cross-row jump: C-a g 4 = 4th gpu, C-a a 2 = 2nd aws, C-a h 1 = 1st home"
     for machine in "${all_machines[@]}"; do
       local key
       key=$(_get_field "$machine" 7)

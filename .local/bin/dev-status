@@ -233,15 +233,17 @@ fi
 prefixes=()
 mapfile -t prefixes < <(_all_prefixes)
 
-per_row_idx=0
-first=true
-has_windows=false
-
 # Tab separator: four spaces (rendered outside any range, so clicks fall through)
 SEP="    "
+SEP_W=4
+
+# --- Pass 1: collect tabs into parallel arrays ---
+tabs_idx=()    # global window index
+tabs_name=()   # display name (after prefix strip)
+tabs_active=() # 0/1
+tabs_pane=()   # "[N]" or empty
 
 while IFS='|' read -r idx name active panes; do
-  # Filter by row
   if [[ "$prefix" == "local" ]]; then
     skip=false
     for p in "${prefixes[@]}"; do
@@ -254,17 +256,6 @@ while IFS='|' read -r idx name active panes; do
     short="${name#${prefix}:}"
   fi
 
-  has_windows=true
-  per_row_idx=$((per_row_idx + 1))
-
-  # Separator (skip before first tab)
-  if [[ "$first" == true ]]; then
-    first=false
-  else
-    printf '%s' "$SEP"
-  fi
-
-  # Resolve pane count to display
   pane_info=""
   if [[ "$prefix" != "local" ]]; then
     remote_count=$(_remote_pane_count "$prefix" "$short")
@@ -277,35 +268,102 @@ while IFS='|' read -r idx name active panes; do
     [[ "$panes" -gt 1 ]] && pane_info="[${panes}]"
   fi
 
+  tabs_idx+=("$idx")
+  tabs_name+=("$short")
+  tabs_active+=("$active")
+  tabs_pane+=("$pane_info")
+done < <(tmux list-windows -F '#{window_index}|#{window_name}|#{window_active}|#{window_panes}' 2>/dev/null)
+
+n_tabs=${#tabs_idx[@]}
+
+# Empty row → em-dash placeholder
+if [[ "$n_tabs" -eq 0 ]]; then
+  printf '#[fg=%s]—#[default]' "$FG_DOT"
+  exit 0
+fi
+
+# --- Width budget ---
+# Reserve space for the static row prefix (drawn by tmux's status-format
+# wrapper, not us): " ◯ <icon> <LABEL>  " ≈ 10 cells for GPU/AWS, 11 for HOME.
+# HOME row also reserves the right-aligned "HH:MM Day DD Mon " ≈ 17 cells.
+client_width=$(tmux display-message -p '#{client_width}' 2>/dev/null)
+[[ -z "$client_width" ]] && client_width=200
+
+if [[ "$prefix" == "local" ]]; then
+  prefix_w=11
+  suffix_w=18
+else
+  prefix_w=10
+  suffix_w=0
+fi
+safety=4
+available=$((client_width - prefix_w - suffix_w - safety))
+[[ "$available" -lt 30 ]] && available=30
+
+# --- Pass 2: compute truncation budget ---
+# Naive total width = sum(idx_w + 1 + name_w + pane_w) + (n-1) * SEP_W
+fixed_total=0
+naive_total=0
+i=0
+while [[ "$i" -lt "$n_tabs" ]]; do
+  per_row=$((i + 1))
+  per_row_w=${#per_row}
+  name_w=${#tabs_name[i]}
+  pane_w=${#tabs_pane[i]}
+  fixed_total=$((fixed_total + per_row_w + 1 + pane_w))
+  naive_total=$((naive_total + per_row_w + 1 + name_w + pane_w))
+  i=$((i + 1))
+done
+naive_total=$((naive_total + (n_tabs - 1) * SEP_W))
+fixed_total=$((fixed_total + (n_tabs - 1) * SEP_W))
+
+# Truncation budget per name (only kicks in when overflow)
+max_name_w=0
+if [[ "$naive_total" -gt "$available" ]]; then
+  budget=$((available - fixed_total))
+  max_name_w=$((budget / n_tabs))
+  [[ "$max_name_w" -lt 6 ]] && max_name_w=6   # floor: "…abcde" is the smallest informative form
+fi
+
+# --- Pass 3: emit ---
+i=0
+first=true
+while [[ "$i" -lt "$n_tabs" ]]; do
+  idx="${tabs_idx[i]}"
+  short="${tabs_name[i]}"
+  active="${tabs_active[i]}"
+  pane_info="${tabs_pane[i]}"
+  per_row_idx=$((i + 1))
   idx_str="$per_row_idx"
 
-  # Open clickable range — tmux resolves clicks via #{mouse_status_range}.
-  # We use type "user" with the global window idx as the value.
+  # Truncate from the LEFT (branch suffixes are typically more informative)
+  if [[ "$max_name_w" -gt 0 ]] && [[ ${#short} -gt "$max_name_w" ]]; then
+    keep=$((max_name_w - 1))
+    short="…${short: -$keep}"
+  fi
+
+  if [[ "$first" == true ]]; then
+    first=false
+  else
+    printf '%s' "$SEP"
+  fi
+
   printf '#[range=user|%s]' "$idx"
 
-  # Emit tab body
   if [[ "$active" == "1" && "$row_is_active" == true ]]; then
-    # Active window in active machine row: bold + accent underline
     printf '#[fg=%s]%s #[fg=%s,bold,underscore]%s#[default]' \
       "$FG_IDX" "$idx_str" "$FG_ACTIVE" "$short"
     [[ -n "$pane_info" ]] && printf '#[fg=%s]%s#[default]' "$FG_ACCENT" "$pane_info"
   elif [[ "$active" == "1" ]]; then
-    # Last-active window in inactive machine row: lifted color, no underline
     printf '#[fg=%s]%s #[fg=%s]%s#[default]' \
       "$FG_IDX" "$idx_str" "$FG_ACTIVE" "$short"
     [[ -n "$pane_info" ]] && printf '#[fg=%s]%s#[default]' "$FG_ACCENT" "$pane_info"
   else
-    # Inactive window
     printf '#[fg=%s]%s #[fg=%s]%s#[default]' \
       "$FG_IDX" "$idx_str" "$FG_DIM" "$short"
     [[ -n "$pane_info" ]] && printf '#[fg=%s]%s#[default]' "$FG_DOT" "$pane_info"
   fi
 
-  # Close range
   printf '#[norange]'
-done < <(tmux list-windows -F '#{window_index}|#{window_name}|#{window_active}|#{window_panes}' 2>/dev/null)
-
-# If no windows, render em-dash placeholder
-if [[ "$has_windows" != true ]]; then
-  printf '#[fg=%s]—#[default]' "$FG_DOT"
-fi
+  i=$((i + 1))
+done
