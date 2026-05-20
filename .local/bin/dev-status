@@ -1,369 +1,185 @@
 #!/usr/bin/env bash
-# dev-status - Generate tmux status line content for command center
-# Reads machine config from ~/.config/dev/machines.conf
-#
-# Usage:
-#   dev-status <machine>       - show windows for a machine (local + remote pane counts)
-#   dev-status local           - show non-machine local windows
-#   dev-status ssh-health <m>  - check SSH reachability
+# dev-status — render the v2 status bar.
+# Subcommands:
+#   bar              # whole bar: focused row + pills + prefix chip + clock
+#   row <machine>    # focused-row tab list with click ranges
+#   pill <machine>   # one peer pill
+#   status-bullet <m>  # back-compat with v1 status-format[N]; deprecated
+set -u
+source ~/.local/bin/dev-lib.sh
 
-CONF_FILE="$HOME/.config/dev/machines.conf"
-CACHE_DIR="/tmp/dev-status-cache"
-mkdir -p "$CACHE_DIR" 2>/dev/null
-
-# Dotbar palette (hardcoded — no tmux variable dependency)
-FG_DIM="#475266"
-FG_ACTIVE="#BFBDB6"
-FG_ACCENT="#95E6CB"
-FG_DOT="#333842"
-FG_IDX="#5c6370"
-
-# Machine colors (active / inactive)
-GPU="#a6e3a1"
-GPU_DIM="#5d8758"
-AWS="#7aa2f7"
-AWS_DIM="#46618f"
-LOCAL="#e0af68"
-LOCAL_DIM="#856839"
-
-# Health
+# --- Palette ---
+BG="#0B0E14"
+FG="#BFBDB6"
+FG_DIM="#7a818d"
+FG_NUM="#475266"
+FG_SEP="#2a313d"
+ACCENT="#95E6CB"
+ACCENT_BG="#1a2433"
 OK="#a6e3a1"
 ERR="#f38ba8"
+PILL_BG="#13171f"
+PILL_ERR_BG="#221318"
 
-prefix="$1"
-if [[ -z "$prefix" ]]; then
-  exit 0
-fi
+CACHE_DIR=/tmp/dev-status-cache
+mkdir -p "$CACHE_DIR" 2>/dev/null
 
-# Get SSH host for a machine name from config
-_get_host() {
-  local name="$1"
-  [[ -f "$CONF_FILE" ]] || return
-  grep -v '^#' "$CONF_FILE" | grep -v '^$' | awk -F'|' -v n="$name" '{
-    gsub(/^[ \t]+|[ \t]+$/, "", $1)
-    gsub(/^[ \t]+|[ \t]+$/, "", $2)
-    if ($1 == n) print $2
-  }'
-}
-
-# Get all machine name prefixes (for filtering local windows)
-_all_prefixes() {
-  [[ -f "$CONF_FILE" ]] || return
-  grep -v '^#' "$CONF_FILE" | grep -v '^$' | awk -F'|' '{gsub(/^[ \t]+|[ \t]+$/, "", $1); print $1}'
-}
-
-# Map a machine name to its (active, inactive) color pair.
-# stdout: two hex colors separated by a space — "<active> <inactive>"
-_machine_color() {
-  case "$1" in
-    gpu)   printf '%s %s' "$GPU" "$GPU_DIM" ;;
-    aws)   printf '%s %s' "$AWS" "$AWS_DIM" ;;
-    local) printf '%s %s' "$LOCAL" "$LOCAL_DIM" ;;
-    *)     printf '%s %s' "$FG_ACTIVE" "$FG_DIM" ;;
-  esac
-}
-
-# Echo the machine name that owns the currently focused window, or "local"
-# if no machine prefix matches. Used to decide which row gets the filled bullet.
-_active_machine() {
-  local active_name
-  active_name=$(tmux display-message -p '#{window_name}' 2>/dev/null) || return
-  local p
-  while IFS= read -r p; do
-    [[ -z "$p" ]] && continue
-    if [[ "$active_name" == "${p}:"* ]]; then
-      printf '%s' "$p"
-      return
-    fi
-  done < <(_all_prefixes)
-  printf 'local'
-}
-
-# --- Non-blocking background refresh helper ---
-# Usage: _bg_refresh <cache_key> <ttl_seconds> <command...>
-# Always returns cached value immediately. Refreshes in background if stale.
+# Background refresh helper (existing pattern from v1).
+# Spawns "$@" in background if cached output for "$key" is older than $ttl seconds.
 _bg_refresh() {
-  local cache_key="$1" ttl="$2"
-  shift 2
-  local cache_file="$CACHE_DIR/$cache_key"
-  local lock_file="$CACHE_DIR/${cache_key}.lock"
+  local key="$1" ttl="$2"; shift 2
+  local f="$CACHE_DIR/$key"
+  if [[ -f "$f" ]] && (( $(date +%s) - $(stat -f %m "$f" 2>/dev/null || echo 0) < ttl )); then
+    return
+  fi
+  ( "$@" > "$f.tmp" 2>/dev/null && mv "$f.tmp" "$f" ) &
+}
 
-  # Always return cached value immediately
-  if [[ -f "$cache_file" ]]; then
-    cat "$cache_file"
+_machine_healthy() {
+  local m="$1"
+  # If the host has any open window, assume healthy. (Future Layer 3 health-cache integration TBD.)
+  local windows
+  windows=$(dev_lib::windows_for "$m" | wc -l | tr -d ' ')
+  (( windows > 0 ))
+}
+
+# --- Subcommand: row <machine> ---
+# Renders: bullet + label + │ + clickable tabs + (if focused row) + spawn affordance
+row() {
+  local m="$1"
+  local active_m
+  active_m=$(dev_lib::active_machine)
+  local color
+  color=$(dev_lib::machine_color "$m" 2>/dev/null)
+  [[ -z "$color" ]] && color="$FG"
+  local label_text
+  case "$m" in
+    gpu)   label_text="󰢮 GPU" ;;
+    aws)   label_text="󰅟 AWS" ;;
+    local) label_text="󰆍 HOME" ;;
+    *)     label_text="$(dev_lib::machine_icon "$m") $(echo "$m" | tr '[:lower:]' '[:upper:]')" ;;
+  esac
+
+  local bullet bullet_color
+  if _machine_healthy "$m"; then
+    bullet="●"; bullet_color="$color"
+  else
+    bullet="●"; bullet_color="$ERR"
   fi
 
-  # Check if stale
-  local stale=false
-  if [[ ! -f "$cache_file" ]]; then
-    stale=true
-  elif command -v stat &>/dev/null; then
-    local now age mtime
-    now=$(date +%s)
-    # macOS stat vs Linux stat
-    if stat -f%m /dev/null &>/dev/null 2>&1; then
-      mtime=$(stat -f%m "$cache_file" 2>/dev/null || echo 0)
+  # Header: bullet + label + separator
+  printf '#[fg=%s]%s#[default] #[fg=%s,bold]%s#[default] #[fg=%s]│#[default]' \
+    "$bullet_color" "$bullet" "$color" "$label_text" "$FG_SEP"
+
+  # Current window index (for active-tab highlight)
+  local current_idx
+  current_idx=$(tmux display-message -p '#{window_index}' 2>/dev/null)
+
+  # Tabs
+  local n=0
+  local rendered=""
+  while IFS='|' read -r gidx name; do
+    n=$((n + 1))
+    local truncated
+    truncated=$(dev_lib::truncate "$name" 22)
+    if [[ "$gidx" == "$current_idx" ]]; then
+      rendered+=$(printf '  #[range=user|%s]#[fg=%s]%d#[default] #[fg=%s,bold]%s#[default]#[norange]' \
+        "$gidx" "$FG_NUM" "$n" "$ACCENT" "$truncated")
     else
-      mtime=$(stat -c%Y "$cache_file" 2>/dev/null || echo 0)
+      rendered+=$(printf '  #[range=user|%s]#[fg=%s]%d#[default] #[fg=%s]%s#[default]#[norange]' \
+        "$gidx" "$FG_NUM" "$n" "$FG_DIM" "$truncated")
     fi
-    age=$((now - mtime))
-    [[ $age -gt $ttl ]] && stale=true
-  fi
+  done < <(dev_lib::windows_for "$m")
 
-  # Refresh in background if stale and not already refreshing
-  if [[ "$stale" == true ]]; then
-    if ! [[ -f "$lock_file" ]]; then
-      (
-        touch "$lock_file"
-        local tmp_file="${cache_file}.tmp"
-        eval "$@" > "$tmp_file" 2>/dev/null
-        mv -f "$tmp_file" "$cache_file" 2>/dev/null
-        rm -f "$lock_file"
-      ) &>/dev/null &
-      disown
-    fi
+  printf '%s' "$rendered"
+
+  # + spawn affordance (only on focused row)
+  if [[ "$m" == "$active_m" ]]; then
+    printf '  #[range=user|+]#[fg=%s]+#[default]#[norange]' "$FG_NUM"
   fi
 }
 
-# --- Status bullet (active/inactive + health) ---
-# Combined indicator: filled ● if this machine owns the focused window, hollow ◯ otherwise.
-# Color = machine color (active state) or DIM (inactive state); ERR red overrides if SSH down.
-if [[ "$prefix" == "status-bullet" ]]; then
-  machine="$2"
-  read -r active_color inactive_color < <(_machine_color "$machine")
-
-  active_machine=$(_active_machine)
-  if [[ "$machine" == "$active_machine" ]]; then
-    glyph="●"
-    color="$active_color"
+# --- Subcommand: pill <machine> ---
+pill() {
+  local m="$1"
+  local color count bullet_color bg
+  color=$(dev_lib::machine_color "$m" 2>/dev/null)
+  count=$(dev_lib::windows_for "$m" | wc -l | tr -d ' ')
+  if _machine_healthy "$m"; then
+    bullet_color="$color"
+    bg="$PILL_BG"
   else
-    glyph="◯"
-    color="$inactive_color"
+    bullet_color="$ERR"
+    bg="$PILL_ERR_BG"
   fi
-
-  # Override with ERR red if a real SSH probe says the machine is down.
-  # (Local "machine" never has a host, so it is never marked as ERR.)
-  host=$(_get_host "$machine")
-  if [[ -n "$host" ]]; then
-    health_cache="$CACHE_DIR/health-${machine}"
-    if [[ -f "$health_cache" ]] && grep -q '#f38ba8' "$health_cache"; then
-      color="$ERR"
-    fi
-  fi
-
-  printf '#[fg=%s]%s#[default]' "$color" "$glyph"
-  exit 0
-fi
-
-# --- SSH health check ---
-if [[ "$prefix" == "ssh-health" ]]; then
-  machine="$2"
-  host=$(_get_host "$machine")
-  if [[ -z "$host" ]]; then
-    printf "#[fg=${FG_DIM}]●"
-    exit 0
-  fi
-
-  # If there's an active tmux window for this machine, we're connected — skip probe
-  if tmux list-windows -F '#{window_name}' 2>/dev/null | grep -q "^${machine}:"; then
-    printf "#[fg=#a6e3a1]●"
-    # Keep cache warm so it doesn't go stale when window closes
-    printf "#[fg=#a6e3a1]●" > "$CACHE_DIR/health-${machine}" 2>/dev/null
-    exit 0
-  fi
-
-  _bg_refresh "health-${machine}" 30 \
-    "if ssh -o ConnectTimeout=3 -o BatchMode=yes '$host' 'echo ok' &>/dev/null; then printf '#[fg=#a6e3a1]●'; else printf '#[fg=#f38ba8]●'; fi"
-
-  # If no cache yet, show dim
-  if [[ ! -f "$CACHE_DIR/health-${machine}" ]]; then
-    printf "#[fg=${FG_DIM}]●"
-  fi
-
-  exit 0
-fi
-
-# --- Remote pane info (background refresh) ---
-# Fetches remote tmux session:pane_count pairs, cached per machine
-_get_remote_panes() {
-  local machine="$1"
-  local cache_file="$CACHE_DIR/panes-${machine}"
-  local host
-  host=$(_get_host "$machine")
-  [[ -z "$host" ]] && return
-
-  # Refresh cache in background (every 5 seconds) — suppress stdout
-  _bg_refresh "panes-${machine}" 5 \
-    "ssh -o ConnectTimeout=3 -o BatchMode=yes '$host' 'tmux list-windows -a -F \"#{session_name}|#{window_panes}\" 2>/dev/null' | awk -F\"|\" \"{panes[\\\$1]+=\\\$2} END {for (s in panes) print s\\\"|\\\"panes[s]}\"" > /dev/null
-
-  # Return nothing — caller reads cache file directly
+  local label_text
+  case "$m" in
+    gpu)   label_text="GPU" ;;
+    aws)   label_text="AWS" ;;
+    local) label_text="HOME" ;;
+    *)     label_text=$(echo "$m" | tr '[:lower:]' '[:upper:]') ;;
+  esac
+  printf '#[range=pill|%s]#[bg=%s,fg=%s] ●#[fg=%s] %s#[fg=%s] %d #[default]#[norange]' \
+    "$m" "$bg" "$bullet_color" "$color" "$label_text" "$FG_NUM" "$count"
 }
 
-# Lookup remote pane count for a session name
-_remote_pane_count() {
-  local machine="$1" session="$2"
-  local cache_file="$CACHE_DIR/panes-${machine}"
-  [[ -f "$cache_file" ]] || return
-  awk -F'|' -v s="$session" '$1 == s {print $2}' "$cache_file"
+# --- Subcommand: bar ---
+bar() {
+  local active_m
+  active_m=$(dev_lib::active_machine)
+
+  # Focused row
+  row "$active_m"
+
+  # Right-align: pills + prefix chip + clock
+  printf '#[align=right]'
+
+  # Peer pills (every machine except active, in declared order; "local" always last)
+  local peers=()
+  while IFS= read -r m; do
+    [[ "$m" == "$active_m" ]] && continue
+    peers+=("$m")
+  done < <(dev_lib::machines)
+  if [[ "$active_m" != "local" ]]; then
+    peers+=("local")
+  fi
+  for m in "${peers[@]}"; do
+    pill "$m"
+    printf ' '
+  done
+
+  # Prefix chip (C-a / C-b / jump-table indicator)
+  local chip=""
+  if [[ "$(tmux display-message -p '#{client_prefix}' 2>/dev/null)" == "1" ]]; then
+    chip="C-a"
+  elif [[ "$(tmux show-options -gqv @remote_prefix 2>/dev/null)" == "1" ]]; then
+    chip="C-b"
+  fi
+  if [[ -n "$chip" ]]; then
+    printf '#[bg=%s,fg=%s] %s #[default]' "$ACCENT_BG" "$ACCENT" "$chip"
+  else
+    printf '#[fg=%s]%s ' "$FG_NUM" "$(date +%H:%M)"
+  fi
 }
 
-# --- Window list ---
-# Renders tabs for one row (machine prefix or "local"). Indices are per-row,
-# starting at 1 within each render. Output uses tmux #[...] sequences only.
-#
-# Each tab is wrapped in #[range=user|<global_idx>]...#[norange] so tmux
-# itself resolves mouse clicks via #{mouse_status_range} — no manual
-# column-to-tab mapping needed.
-
-# Resolve active/inactive colors for the row
-read -r row_active_color row_inactive_color < <(_machine_color "$prefix")
-active_machine=$(_active_machine)
-if [[ "$prefix" == "$active_machine" ]]; then
-  row_is_active=true
-else
-  row_is_active=false
-fi
-
-# Trigger remote pane refresh for machine views
-if [[ "$prefix" != "local" ]]; then
-  _get_remote_panes "$prefix"
-fi
-
-# Build prefix list for local-row filtering
-prefixes=()
-mapfile -t prefixes < <(_all_prefixes)
-
-# Tab separator: four spaces (rendered outside any range, so clicks fall through)
-SEP="    "
-SEP_W=4
-
-# --- Pass 1: collect tabs into parallel arrays ---
-tabs_idx=()    # global window index
-tabs_name=()   # display name (after prefix strip)
-tabs_active=() # 0/1
-tabs_pane=()   # "[N]" or empty
-
-while IFS='|' read -r idx name active panes; do
-  if [[ "$prefix" == "local" ]]; then
-    skip=false
-    for p in "${prefixes[@]}"; do
-      [[ "$name" == ${p}:* ]] && skip=true && break
-    done
-    [[ "$skip" == true ]] && continue
-    short="$name"
+# Back-compat: keep status-bullet so v1 tmux-status.conf doesn't crash during transition.
+status_bullet() {
+  local m="$1"
+  local color bullet
+  color=$(dev_lib::machine_color "$m" 2>/dev/null)
+  [[ -z "$color" ]] && color="$FG"
+  if _machine_healthy "$m"; then
+    printf '#[fg=%s]●#[default]' "$color"
   else
-    [[ "$name" != ${prefix}:* ]] && continue
-    short="${name#${prefix}:}"
+    printf '#[fg=%s]●#[default]' "$ERR"
   fi
+}
 
-  pane_info=""
-  if [[ "$prefix" != "local" ]]; then
-    remote_count=$(_remote_pane_count "$prefix" "$short")
-    if [[ -n "$remote_count" ]] && [[ "$remote_count" -gt 1 ]]; then
-      pane_info="[${remote_count}]"
-    elif [[ "$panes" -gt 1 ]]; then
-      pane_info="[${panes}]"
-    fi
-  else
-    [[ "$panes" -gt 1 ]] && pane_info="[${panes}]"
-  fi
-
-  tabs_idx+=("$idx")
-  tabs_name+=("$short")
-  tabs_active+=("$active")
-  tabs_pane+=("$pane_info")
-done < <(tmux list-windows -F '#{window_index}|#{window_name}|#{window_active}|#{window_panes}' 2>/dev/null)
-
-n_tabs=${#tabs_idx[@]}
-
-# Empty row → em-dash placeholder
-if [[ "$n_tabs" -eq 0 ]]; then
-  printf '#[fg=%s]—#[default]' "$FG_DOT"
-  exit 0
-fi
-
-# --- Width budget ---
-# Reserve space for the static row prefix (drawn by tmux's status-format
-# wrapper, not us): " ◯ <icon> <LABEL>  " ≈ 10 cells for GPU/AWS, 11 for HOME.
-# HOME row also reserves the right-aligned "HH:MM Day DD Mon " ≈ 17 cells.
-client_width=$(tmux display-message -p '#{client_width}' 2>/dev/null)
-[[ -z "$client_width" ]] && client_width=200
-
-if [[ "$prefix" == "local" ]]; then
-  prefix_w=11
-  suffix_w=18
-else
-  prefix_w=10
-  suffix_w=0
-fi
-safety=4
-available=$((client_width - prefix_w - suffix_w - safety))
-[[ "$available" -lt 30 ]] && available=30
-
-# --- Pass 2: compute truncation budget ---
-# Naive total width = sum(idx_w + 1 + name_w + pane_w) + (n-1) * SEP_W
-fixed_total=0
-naive_total=0
-i=0
-while [[ "$i" -lt "$n_tabs" ]]; do
-  per_row=$((i + 1))
-  per_row_w=${#per_row}
-  name_w=${#tabs_name[i]}
-  pane_w=${#tabs_pane[i]}
-  fixed_total=$((fixed_total + per_row_w + 1 + pane_w))
-  naive_total=$((naive_total + per_row_w + 1 + name_w + pane_w))
-  i=$((i + 1))
-done
-naive_total=$((naive_total + (n_tabs - 1) * SEP_W))
-fixed_total=$((fixed_total + (n_tabs - 1) * SEP_W))
-
-# Truncation budget per name (only kicks in when overflow)
-max_name_w=0
-if [[ "$naive_total" -gt "$available" ]]; then
-  budget=$((available - fixed_total))
-  max_name_w=$((budget / n_tabs))
-  [[ "$max_name_w" -lt 6 ]] && max_name_w=6   # floor: "…abcde" is the smallest informative form
-fi
-
-# --- Pass 3: emit ---
-i=0
-first=true
-while [[ "$i" -lt "$n_tabs" ]]; do
-  idx="${tabs_idx[i]}"
-  short="${tabs_name[i]}"
-  active="${tabs_active[i]}"
-  pane_info="${tabs_pane[i]}"
-  per_row_idx=$((i + 1))
-  idx_str="$per_row_idx"
-
-  # Truncate from the LEFT (branch suffixes are typically more informative)
-  if [[ "$max_name_w" -gt 0 ]] && [[ ${#short} -gt "$max_name_w" ]]; then
-    keep=$((max_name_w - 1))
-    short="…${short: -$keep}"
-  fi
-
-  if [[ "$first" == true ]]; then
-    first=false
-  else
-    printf '%s' "$SEP"
-  fi
-
-  printf '#[range=user|%s]' "$idx"
-
-  if [[ "$active" == "1" && "$row_is_active" == true ]]; then
-    printf '#[fg=%s]%s #[fg=%s,bold,underscore]%s#[default]' \
-      "$FG_IDX" "$idx_str" "$FG_ACTIVE" "$short"
-    [[ -n "$pane_info" ]] && printf '#[fg=%s]%s#[default]' "$FG_ACCENT" "$pane_info"
-  elif [[ "$active" == "1" ]]; then
-    printf '#[fg=%s]%s #[fg=%s]%s#[default]' \
-      "$FG_IDX" "$idx_str" "$FG_ACTIVE" "$short"
-    [[ -n "$pane_info" ]] && printf '#[fg=%s]%s#[default]' "$FG_ACCENT" "$pane_info"
-  else
-    printf '#[fg=%s]%s #[fg=%s]%s#[default]' \
-      "$FG_IDX" "$idx_str" "$FG_DIM" "$short"
-    [[ -n "$pane_info" ]] && printf '#[fg=%s]%s#[default]' "$FG_DOT" "$pane_info"
-  fi
-
-  printf '#[norange]'
-  i=$((i + 1))
-done
+case "${1:-bar}" in
+  bar)            bar ;;
+  row)            row "${2:-local}" ;;
+  pill)           pill "${2:-local}" ;;
+  status-bullet)  status_bullet "${2:-local}" ;;
+  *)              # Legacy: dev-status <machine> → row <machine>
+                  row "$1" ;;
+esac
