@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# dev-reap-pane <pane_id>
+# Called by tmux pane-died hook. If the dead pane was a remote session, attempt to
+# respawn (rate-limited to 3 in 60 seconds; falls back to prompt mode).
+set -u
+source ~/.local/bin/dev-lib.sh
+
+pane_id="${1:-}"
+[[ -z "$pane_id" ]] && exit 0
+
+# Look up the window containing this pane
+window_target=$(tmux display-message -p -t "$pane_id" '#{session_name}:#{window_index}' 2>/dev/null) || exit 0
+machine=$(tmux show-window-options -v -t "$window_target" @dev_machine 2>/dev/null || true)
+session=$(tmux show-window-options -v -t "$window_target" @dev_session 2>/dev/null || true)
+
+# Skip if local or untagged
+[[ -z "$machine" || "$machine" == "local" ]] && exit 0
+
+auto=$(tmux show-window-options -v -t "$window_target" @dev_auto_reconnect 2>/dev/null || echo "on")
+[[ "$auto" != "on" ]] && exit 0
+
+# Rate-limit: at most 3 respawns in 60 seconds per window
+state_dir=/tmp/dev-status-cache
+mkdir -p "$state_dir" 2>/dev/null
+window_id=$(tmux display-message -p -t "$window_target" '#{window_id}' 2>/dev/null)
+counter_file="$state_dir/reap-${window_id//[^a-zA-Z0-9]/_}"
+now=$(date +%s)
+
+prev_attempts=()
+if [[ -f "$counter_file" ]]; then
+  while IFS= read -r ts; do
+    if (( now - ts < 60 )); then
+      prev_attempts+=("$ts")
+    fi
+  done < "$counter_file"
+fi
+
+if (( ${#prev_attempts[@]} >= 3 )); then
+  # Bail to prompt mode: write a message to the dead pane.
+  tmux respawn-pane -k -t "$pane_id" "echo 'Connection died too often. Press C-a R to retry, or close the pane.'; cat" 2>/dev/null
+  exit 0
+fi
+
+# Record attempt
+{
+  for ts in "${prev_attempts[@]}"; do echo "$ts"; done
+  echo "$now"
+} > "$counter_file"
+
+# Respawn
+tmux respawn-pane -k -t "$pane_id" "~/.local/bin/dev $machine ${session:-main}" 2>/dev/null
