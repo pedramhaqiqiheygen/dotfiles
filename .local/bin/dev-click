@@ -1,38 +1,73 @@
 #!/usr/bin/env bash
-# dev-click <action> <window_idx>
-# Performs <action> on window <window_idx>. The window idx is resolved by
-# tmux via #{mouse_status_range} on a #[range=user|<idx>] in the status
-# format — this script only dispatches.
-#
-# Actions:
-#   select  -> tmux select-window -t <idx>
-#   kill    -> tmux kill-window -t <idx>
-#   preview -> tmux display-popup -E "tmux capture-pane -p -t <idx> -S -50 | less +G"
-#
-# Silently no-ops on missing args, non-numeric idx, or unknown action.
-
+# dev-click <action> <range-id>
+# Range id forms:
+#   <N>          — global window index (from #[range=user|N])
+#   pill|<m>     — machine pill (from #[range=pill|m])
+#   user|+       — spawn affordance (passed through as literal "+")
 set -u
+source ~/.local/bin/dev-lib.sh
 
 action="${1:-}"
-target_idx="${2:-}"
+target="${2:-}"
+[[ -z "$action" || -z "$target" ]] && exit 0
 
-[[ -n "$action" ]] || exit 0
-# tmux passes empty string when click was outside any range — silently no-op.
-[[ -n "$target_idx" ]] || exit 0
-[[ "$target_idx" =~ ^[0-9]+$ ]] || exit 0
-
-case "$action" in
-  select)
-    tmux select-window -t "$target_idx" 2>/dev/null
-    ;;
-  kill)
-    tmux kill-window -t "$target_idx" 2>/dev/null
-    ;;
-  preview)
-    tmux display-popup -w 80% -h 60% -E \
-      "tmux capture-pane -p -t '$target_idx' -S -50 | less +G" 2>/dev/null
-    ;;
-  *)
+# Strip "user|" / "pill|" prefix that tmux adds back from #[range=...]
+case "$target" in
+  user\|*)  target="${target#user|}" ;;
+  pill\|*)
+    machine="${target#pill|}"
+    case "$action" in
+      select)
+        last_win=$(tmux show-options -gqv "@dev_last_window_$machine" 2>/dev/null)
+        if [[ -n "$last_win" ]]; then
+          tmux select-window -t "$last_win" 2>/dev/null && exit 0
+        fi
+        # Fall back to first window of that machine
+        first=$(dev_lib::windows_for "$machine" | head -1 | cut -d'|' -f1)
+        [[ -n "$first" ]] && tmux select-window -t "$first"
+        exit 0
+        ;;
+      preview)
+        # Preview the last-active window of that machine
+        last_win=$(tmux show-options -gqv "@dev_last_window_$machine" 2>/dev/null)
+        [[ -z "$last_win" ]] && last_win=$(dev_lib::windows_for "$machine" | head -1 | cut -d'|' -f1)
+        [[ -z "$last_win" ]] && exit 0
+        # Resolve to per-row index for dev-preview
+        n=0
+        while IFS='|' read -r gidx _name; do
+          n=$((n + 1))
+          if [[ "$gidx" == "$last_win" ]]; then
+            exec ~/.local/bin/dev-preview "$n"
+          fi
+        done < <(dev_lib::windows_for "$machine")
+        exit 0
+        ;;
+    esac
     exit 0
+    ;;
+esac
+
+# Spawn affordance: literal "+"
+if [[ "$target" == "+" ]]; then
+  case "$action" in
+    select|preview) exec ~/.local/bin/dev-spawn current ;;
+  esac
+  exit 0
+fi
+
+# Regular window-index target
+case "$action" in
+  select)  tmux select-window -t "$target" ;;
+  kill)    tmux kill-window   -t "$target" ;;
+  preview)
+    # Resolve to per-row idx for dev-preview
+    machine=$(dev_lib::active_machine)
+    n=0
+    while IFS='|' read -r gidx _name; do
+      n=$((n + 1))
+      if [[ "$gidx" == "$target" ]]; then
+        exec ~/.local/bin/dev-preview "$n"
+      fi
+    done < <(dev_lib::windows_for "$machine")
     ;;
 esac
