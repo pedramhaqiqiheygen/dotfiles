@@ -550,11 +550,39 @@ kill_session() {
   ssh "$host" "tmux kill-session -t '$session' 2>/dev/null && echo 'Killed: $session' || echo 'Session not found: $session'"
 }
 
-# SSH command for interactive sessions
-# Uses plain ssh — keepalive is configured in ~/.ssh/config
-# autossh doesn't work well with -t (pseudo-terminal) for interactive use
+# SSH command for interactive sessions.
+# Prefers mosh (survives sleep/network changes); falls back to autossh; finally plain ssh.
+# Returned prefix includes `-t` for ssh/autossh; mosh handles the pty itself.
 _ssh_cmd() {
-  echo "ssh"
+  local host="${1:-}"
+  if [[ -n "$host" ]] && command -v mosh >/dev/null 2>&1 && _mosh_supported "$host"; then
+    echo "mosh --predict=experimental"
+    return
+  fi
+  if command -v autossh >/dev/null 2>&1; then
+    echo "autossh -M 0 -t"
+    return
+  fi
+  echo "ssh -t"
+}
+
+_mosh_supported() {
+  local host="$1"
+  local cache="/tmp/dev-status-cache/mosh-$host"
+  mkdir -p /tmp/dev-status-cache 2>/dev/null
+  # 24-hour cache
+  if [[ -f "$cache" ]]; then
+    local age=$(( $(date +%s) - $(stat -f %m "$cache" 2>/dev/null || echo 0) ))
+    if (( age < 86400 )); then
+      [[ "$(cat "$cache")" == "yes" ]]
+      return $?
+    fi
+  fi
+  if ssh -o ConnectTimeout=3 -o BatchMode=yes "$host" 'command -v mosh-server >/dev/null 2>&1'; then
+    echo yes > "$cache"; return 0
+  else
+    echo no > "$cache"; return 1
+  fi
 }
 
 # Sync dotfiles on remote (background, non-blocking)
@@ -591,7 +619,7 @@ connect() {
     remote_cmd="tmux new-session -A -s '${session}'"
   fi
 
-  local ssh=$(_ssh_cmd)
+  local ssh=$(_ssh_cmd "$host")
 
   if [[ -n "${TMUX:-}" ]]; then
     local existing
@@ -605,7 +633,7 @@ connect() {
       tmux new-window -n "$window_name" "\
         while true; do \
           echo \"[\$(date '+%Y-%m-%d %H:%M:%S')] CONNECT ${window_name} → ${host}\" >> ${log_file}; \
-          $ssh -t $host \"$remote_cmd\"; \
+          $ssh $host \"$remote_cmd\"; \
           rc=\$?; \
           echo \"[\$(date '+%Y-%m-%d %H:%M:%S')] DISCONNECT ${window_name} (exit=\$rc)\" >> ${log_file}; \
           if [ \$rc -eq 0 ]; then break; fi; \
@@ -617,7 +645,7 @@ connect() {
       tmux set-window-option -t : @dev_session "$session"
     fi
   else
-    $ssh -t "$host" "$remote_cmd"
+    $ssh "$host" "$remote_cmd"
   fi
 }
 
