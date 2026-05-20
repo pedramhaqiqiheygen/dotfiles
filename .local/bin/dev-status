@@ -167,6 +167,8 @@ bar() {
 # or the bullet+label will double up while the v1 status conf is still active.
 tabs_only() {
   local m="$1"
+  local active_m
+  active_m=$(dev_lib::active_machine)
   local current_idx
   current_idx=$(tmux display-message -p '#{window_index}' 2>/dev/null)
   local n=0
@@ -182,6 +184,10 @@ tabs_only() {
         "$gidx" "$FG_NUM" "$n" "$FG_DIM" "$truncated"
     fi
   done < <(dev_lib::windows_for "$m")
+  # Spawn affordance only on the focused row
+  if [[ "$m" == "$active_m" ]]; then
+    printf '  #[range=user|+]#[fg=%s]+#[default]#[norange]' "$FG_NUM"
+  fi
 }
 
 # Back-compat: keep status-bullet so v1 tmux-status.conf doesn't crash during transition.

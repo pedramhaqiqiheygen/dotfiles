@@ -41,8 +41,15 @@ dev_lib::machine_field() {
 }
 
 dev_lib::machine_host()   { dev_lib::machine_field "$1" 2; }
-dev_lib::machine_icon()   { dev_lib::machine_field "$1" 4; }
-dev_lib::machine_color()  { dev_lib::machine_field "$1" 5; }
+dev_lib::machine_icon() {
+  # "local" is synthetic (not in machines.conf) but consumers expect an icon/color.
+  [[ "$1" == "local" ]] && { printf '󰆍\n'; return; }
+  dev_lib::machine_field "$1" 4
+}
+dev_lib::machine_color() {
+  [[ "$1" == "local" ]] && { printf '#e0af68\n'; return; }
+  dev_lib::machine_field "$1" 5
+}
 
 # Echo @dev_machine of the current window. "local" if unset.
 dev_lib::active_machine() {
