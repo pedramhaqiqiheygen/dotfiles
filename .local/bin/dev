@@ -612,6 +612,9 @@ connect() {
           echo 'Connection lost (exit='\$rc'). Reconnecting in 3s... (Ctrl-C to stop)'; \
           sleep 3; \
         done"
+      # Set machine/session user-options on the newly created window
+      tmux set-window-option -t : @dev_machine "$machine"
+      tmux set-window-option -t : @dev_session "$session"
     fi
   else
     $ssh -t "$host" "$remote_cmd"
