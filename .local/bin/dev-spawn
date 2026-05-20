@@ -27,4 +27,4 @@ while echo "$existing_sessions" | grep -qx "${target}-${n}"; do
 done
 session="${target}-${n}"
 
-exec ~/.local/bin/dev "$target" "$session"
+exec ~/.local/bin/dev "$target" --ws --session "$session"

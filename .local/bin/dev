@@ -602,7 +602,11 @@ connect() {
 
   local setup_cmd=""
   if [[ -n "$start_dir" ]]; then
-    setup_cmd="cd ${start_dir} && "
+    if [[ -n "$post_cmd" ]]; then
+      setup_cmd="cd ${start_dir} && "
+    else
+      setup_cmd="cd ${start_dir}"
+    fi
   fi
 
   # Refresh repo cache and sync dotfiles in background
@@ -706,6 +710,7 @@ main() {
   local session=""
   local branch=""
   local claude_flag=false
+  local ws_flag=false
 
   # Handle subcommands
   if [[ $# -gt 0 ]]; then
@@ -772,6 +777,10 @@ main() {
         session="${2:?'Session name required'}"
         shift 2
         ;;
+      --ws|--workspace)
+        ws_flag=true
+        shift
+        ;;
       --help|-h)
         usage
         exit 0
@@ -789,6 +798,9 @@ main() {
   if [[ -n "$repo" ]]; then
     start_dir="$(get_workspace "$machine")/${repo}"
     session="${session:-$repo}"
+  elif [[ "$ws_flag" == true ]]; then
+    start_dir="$(get_workspace "$machine")"
+    session="${session:-main}"
   else
     session="${session:-main}"
   fi
