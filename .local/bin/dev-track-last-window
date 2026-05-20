@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Record the current window as the "last-active" for its @dev_machine.
+# Called from after-select-window hook.
+set -u
+source ~/.local/bin/dev-lib.sh
+
+m=$(dev_lib::active_machine)
+wid=$(tmux display-message -p '#{window_id}' 2>/dev/null)
+[[ -z "$m" || -z "$wid" ]] && exit 0
+tmux set-option -g "@dev_last_window_$m" "$wid"

@@ -1,0 +1,77 @@
+# v2 status: one row, full bar rendered by dev-status bar.
+set -g status on
+set -g status-format[0] "#(~/.local/bin/dev-status bar)"
+
+# --- Same-row digit jump: C-a 1..9 ---
+bind 1 run-shell "~/.local/bin/dev-jump-current 1"
+bind 2 run-shell "~/.local/bin/dev-jump-current 2"
+bind 3 run-shell "~/.local/bin/dev-jump-current 3"
+bind 4 run-shell "~/.local/bin/dev-jump-current 4"
+bind 5 run-shell "~/.local/bin/dev-jump-current 5"
+bind 6 run-shell "~/.local/bin/dev-jump-current 6"
+bind 7 run-shell "~/.local/bin/dev-jump-current 7"
+bind 8 run-shell "~/.local/bin/dev-jump-current 8"
+bind 9 run-shell "~/.local/bin/dev-jump-current 9"
+
+# --- Launchers ---
+bind G run-shell "~/.local/bin/dev gpu"
+bind A run-shell "~/.local/bin/dev aws"
+
+# --- Spawn fresh tab on current machine ---
+bind N run-shell "~/.local/bin/dev-spawn current"
+
+# --- Cross-row jump leader: C-a j <machine-letter> <digit> ---
+bind j switch-client -T jump
+bind -T jump g switch-client -T jump_gpu
+bind -T jump a switch-client -T jump_aws
+bind -T jump l switch-client -T jump_local
+bind -T jump Any switch-client -T root
+
+bind -T jump_gpu 1 run-shell "~/.local/bin/dev-jump gpu 1"
+bind -T jump_gpu 2 run-shell "~/.local/bin/dev-jump gpu 2"
+bind -T jump_gpu 3 run-shell "~/.local/bin/dev-jump gpu 3"
+bind -T jump_gpu 4 run-shell "~/.local/bin/dev-jump gpu 4"
+bind -T jump_gpu 5 run-shell "~/.local/bin/dev-jump gpu 5"
+bind -T jump_gpu 6 run-shell "~/.local/bin/dev-jump gpu 6"
+bind -T jump_gpu 7 run-shell "~/.local/bin/dev-jump gpu 7"
+bind -T jump_gpu 8 run-shell "~/.local/bin/dev-jump gpu 8"
+bind -T jump_gpu 9 run-shell "~/.local/bin/dev-jump gpu 9"
+bind -T jump_gpu N run-shell "~/.local/bin/dev-spawn gpu"
+bind -T jump_gpu Any switch-client -T root
+
+bind -T jump_aws 1 run-shell "~/.local/bin/dev-jump aws 1"
+bind -T jump_aws 2 run-shell "~/.local/bin/dev-jump aws 2"
+bind -T jump_aws 3 run-shell "~/.local/bin/dev-jump aws 3"
+bind -T jump_aws 4 run-shell "~/.local/bin/dev-jump aws 4"
+bind -T jump_aws 5 run-shell "~/.local/bin/dev-jump aws 5"
+bind -T jump_aws 6 run-shell "~/.local/bin/dev-jump aws 6"
+bind -T jump_aws 7 run-shell "~/.local/bin/dev-jump aws 7"
+bind -T jump_aws 8 run-shell "~/.local/bin/dev-jump aws 8"
+bind -T jump_aws 9 run-shell "~/.local/bin/dev-jump aws 9"
+bind -T jump_aws N run-shell "~/.local/bin/dev-spawn aws"
+bind -T jump_aws Any switch-client -T root
+
+bind -T jump_local 1 run-shell "~/.local/bin/dev-jump local 1"
+bind -T jump_local 2 run-shell "~/.local/bin/dev-jump local 2"
+bind -T jump_local 3 run-shell "~/.local/bin/dev-jump local 3"
+bind -T jump_local 4 run-shell "~/.local/bin/dev-jump local 4"
+bind -T jump_local 5 run-shell "~/.local/bin/dev-jump local 5"
+bind -T jump_local 6 run-shell "~/.local/bin/dev-jump local 6"
+bind -T jump_local 7 run-shell "~/.local/bin/dev-jump local 7"
+bind -T jump_local 8 run-shell "~/.local/bin/dev-jump local 8"
+bind -T jump_local 9 run-shell "~/.local/bin/dev-jump local 9"
+bind -T jump_local N run-shell "~/.local/bin/dev-spawn local"
+bind -T jump_local Any switch-client -T root
+
+# --- Preview leader (keyboard): C-a p <digit> ---
+bind p switch-client -T preview_current
+bind -T preview_current 1 run-shell "~/.local/bin/dev-preview 1"
+bind -T preview_current 2 run-shell "~/.local/bin/dev-preview 2"
+bind -T preview_current 3 run-shell "~/.local/bin/dev-preview 3"
+bind -T preview_current 4 run-shell "~/.local/bin/dev-preview 4"
+bind -T preview_current 5 run-shell "~/.local/bin/dev-preview 5"
+bind -T preview_current 6 run-shell "~/.local/bin/dev-preview 6"
+bind -T preview_current 7 run-shell "~/.local/bin/dev-preview 7"
+bind -T preview_current 8 run-shell "~/.local/bin/dev-preview 8"
+bind -T preview_current 9 run-shell "~/.local/bin/dev-preview 9"
+bind -T preview_current Any switch-client -T root
