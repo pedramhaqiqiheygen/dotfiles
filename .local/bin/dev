@@ -621,6 +621,48 @@ connect() {
   fi
 }
 
+# Walk every tmux window, sniff its running command, and set
+# @dev_machine / @dev_session accordingly. Idempotent.
+migrate() {
+  source ~/.local/bin/dev-lib.sh
+  local count=0
+  while IFS='|' read -r session_name win_idx win_name pane_cmd; do
+    # Skip windows that already have @dev_machine set
+    local existing
+    existing=$(tmux show-window-options -v -t "${session_name}:${win_idx}" @dev_machine 2>/dev/null || true)
+    if [[ -n "$existing" ]]; then
+      continue
+    fi
+
+    local machine="local"
+    # Sniff: if pane_current_command (or its args) references a known host, classify.
+    local pane_full
+    pane_full=$(tmux list-panes -t "${session_name}:${win_idx}" -F '#{pane_current_command} #{pane_title}' 2>/dev/null | head -1)
+    while read -r m; do
+      local host
+      host=$(dev_lib::machine_host "$m")
+      if [[ "$pane_full" == *"$host"* ]] || [[ "$win_name" == "${m}:"* ]]; then
+        machine="$m"
+        break
+      fi
+    done < <(dev_lib::machines)
+
+    tmux set-window-option -t "${session_name}:${win_idx}" @dev_machine "$machine"
+
+    # Session: prefer existing prefix from window name (legacy), else "main"
+    local session="main"
+    if [[ "$win_name" == *:* ]]; then
+      session="${win_name#*:}"
+    fi
+    tmux set-window-option -t "${session_name}:${win_idx}" @dev_session "$session"
+
+    printf "migrated %s:%s (%s) → %s\n" "$session_name" "$win_idx" "$win_name" "$machine"
+    count=$((count + 1))
+  done < <(tmux list-windows -a -F '#{session_name}|#{window_index}|#{window_name}|#{pane_current_command}' 2>/dev/null)
+
+  printf "migrated %d window(s)\n" "$count"
+}
+
 # --- Main ---
 
 main() {
@@ -641,6 +683,10 @@ main() {
   if [[ $# -gt 0 ]]; then
     case "$1" in
       setup) setup; exit 0 ;;
+      migrate)
+        migrate
+        exit 0
+        ;;
     esac
   fi
 
