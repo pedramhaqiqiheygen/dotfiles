@@ -2,6 +2,11 @@
 # dev-lib.sh — sourceable helpers shared by dev, dev-status, dev-jump, etc.
 # Do NOT `set -e` here; consumers may need to handle individual failures.
 
+if (( BASH_VERSINFO[0] < 4 )); then
+  echo "dev-lib.sh requires bash 4+ (declare -A). Running under $BASH_VERSION." >&2
+  return 1 2>/dev/null || exit 1
+fi
+
 DEV_LIB_CONF_FILE="${DEV_LIB_CONF_FILE:-$HOME/.config/dev/machines.conf}"
 
 # Known nerd-font icons and their cell widths.
@@ -59,6 +64,8 @@ dev_lib::windows_for() {
 }
 
 # Echo display-cell width of a string (ASCII = 1 cell, known icons from DEV_LIB_ICON_WIDTH).
+# Cell-width of <s>. Unknown chars default to 1 cell (silent under-count for
+# unmapped wide glyphs — add to DEV_LIB_ICON_WIDTH if introducing new icons).
 dev_lib::display_width() {
   local s="$1" width=0 i=0 ch
   local -i len=${#s}
@@ -75,18 +82,38 @@ dev_lib::display_width() {
 }
 
 # Truncate <s> to <max> cells, prepending '…' if truncated.
-# Preserves the suffix (which often contains the most informative part).
+# Preserves the suffix and is cell-aware (nerd-font icons count per DEV_LIB_ICON_WIDTH).
 dev_lib::truncate() {
   local s="$1" max="$2"
+  # Degenerate inputs: zero/negative width budget means empty output.
+  if (( max <= 0 )); then
+    printf '\n'
+    return
+  fi
   local w
   w=$(dev_lib::display_width "$s")
   if (( w <= max )); then
     printf '%s\n' "$s"
     return
   fi
-  # Drop characters from the left until width fits, accounting for the ellipsis (width 1).
-  local keep=$(( max - 1 ))
-  local i=$(( ${#s} - keep ))
-  (( i < 0 )) && i=0
-  printf '…%s\n' "${s:i}"
+  # Reserve 1 cell for the leading ellipsis.
+  local budget=$(( max - 1 ))
+  if (( budget <= 0 )); then
+    printf '…\n'
+    return
+  fi
+  # Walk from the right, accumulating cell widths until adding the next char would exceed budget.
+  local i=$(( ${#s} - 1 ))
+  local used=0 ch ch_w
+  while (( i >= 0 )); do
+    ch="${s:i:1}"
+    ch_w="${DEV_LIB_ICON_WIDTH[$ch]:-1}"
+    if (( used + ch_w > budget )); then
+      break
+    fi
+    used=$(( used + ch_w ))
+    i=$(( i - 1 ))
+  done
+  # Keep chars from index (i+1) to the end.
+  printf '…%s\n' "${s:i+1}"
 }
