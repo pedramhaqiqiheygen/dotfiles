@@ -18,6 +18,10 @@
 !.config/tmux/**
 !.config/starship.toml
 
+# SSH config (keys protected by *.pem / *.key rules below)
+!.ssh/
+!.ssh/config
+
 # Sensitive - never track
 .config/gh/
 **/hosts.json
