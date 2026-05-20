@@ -19,10 +19,12 @@ if [[ "$target" == "local" ]]; then
   exit 0
 fi
 
-# Pick next free session name: <machine>-N
-existing_sessions=$(dev_lib::windows_for "$target" | cut -d'|' -f2 | sort)
+# Pick next free session name: <machine>-N.
+# Match against the actual window_name format that dev's connect() creates:
+# "<machine>:<session>" — e.g., "gpu:gpu-1", "gpu:gpu-2".
+existing_window_names=$(tmux list-windows -a -F '#{window_name}' 2>/dev/null)
 n=1
-while echo "$existing_sessions" | grep -qx "${target}-${n}"; do
+while echo "$existing_window_names" | grep -qx "${target}:${target}-${n}"; do
   n=$((n + 1))
 done
 session="${target}-${n}"
