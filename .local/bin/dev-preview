@@ -1,65 +1,33 @@
 #!/usr/bin/env bash
 # dev-preview <per-row-idx>
-# Pops up a preview of the Nth tab in the focused machine's row.
+# Pops up a preview of the Nth tab of the focused machine's row.
 
 set -u
-
-CONF_FILE="$HOME/.config/dev/machines.conf"
+source ~/.local/bin/dev-lib.sh
 
 idx="${1:-}"
 [[ "$idx" =~ ^[1-9][0-9]*$ ]] || exit 0
 
-# Determine current machine
-current_name=$(tmux display-message -p '#{window_name}' 2>/dev/null) || exit 0
-machine="local"
-if [[ -f "$CONF_FILE" ]]; then
-  while IFS= read -r p; do
-    [[ -z "$p" ]] && continue
-    if [[ "$current_name" == "${p}:"* ]]; then
-      machine="$p"
-      break
-    fi
-  done < <(grep -v '^#' "$CONF_FILE" | grep -v '^$' | awk -F'|' '{gsub(/^[ \t]+|[ \t]+$/, "", $1); print $1}')
-fi
-
-# Resolve Nth window in that row → global idx + name
-prefixes=()
-if [[ -f "$CONF_FILE" ]]; then
-  mapfile -t prefixes < <(grep -v '^#' "$CONF_FILE" | grep -v '^$' | awk -F'|' '{gsub(/^[ \t]+|[ \t]+$/, "", $1); print $1}')
-fi
+machine=$(dev_lib::active_machine)
 
 target_idx=""
 target_name=""
 n=0
 while IFS='|' read -r global_idx name; do
-  if [[ "$machine" == "local" ]]; then
-    skip=false
-    for p in "${prefixes[@]}"; do
-      [[ "$name" == ${p}:* ]] && skip=true && break
-    done
-    [[ "$skip" == true ]] && continue
-  else
-    [[ "$name" != ${machine}:* ]] && continue
-  fi
   n=$((n + 1))
-  if [[ "$n" -eq "$idx" ]]; then
+  if (( n == idx )); then
     target_idx="$global_idx"
     target_name="$name"
     break
   fi
-done < <(tmux list-windows -F '#{window_index}|#{window_name}' 2>/dev/null)
+done < <(dev_lib::windows_for "$machine")
 
 [[ -z "$target_idx" ]] && exit 0
 
-# Capture pane to temp file (full scrollback + colors), strip leading blanks,
-# fall back to a placeholder when truly empty. less -R passes ANSI;
-# --quit-if-one-screen auto-exits on tiny content (no "Esc" prompt).
 tmp=$(mktemp -t dev-preview.XXXXXX)
 trap 'rm -f "$tmp"' EXIT INT TERM
-
 tmux capture-pane -p -e -t "$target_idx" -S - -E - 2>/dev/null \
   | awk 'NF{p=1} p' > "$tmp"
-
 [[ ! -s "$tmp" ]] && printf '(empty pane — no recent output)\n' > "$tmp"
 
 tmux display-popup -T " $target_name " -w 80% -h 60% -E \

@@ -1,44 +1,20 @@
 #!/usr/bin/env bash
 # dev-jump <machine> <per-row-idx>
-# Jumps to the Nth window whose name starts with "<machine>:" (or, for "local",
-# does NOT start with any known machine prefix). Silently no-ops on bad input.
+# Selects the Nth window where @dev_machine matches.
 
 set -u
-
-CONF_FILE="$HOME/.config/dev/machines.conf"
+source ~/.local/bin/dev-lib.sh
 
 machine="${1:-}"
 idx="${2:-}"
-
-# Validate idx is a positive integer
+[[ -n "$machine" ]] || exit 0
 [[ "$idx" =~ ^[1-9][0-9]*$ ]] || exit 0
 
-# Build prefix list (for "local" filtering)
-prefixes=()
-if [[ -f "$CONF_FILE" ]]; then
-  mapfile -t prefixes < <(grep -v '^#' "$CONF_FILE" | grep -v '^$' | awk -F'|' '{gsub(/^[ \t]+|[ \t]+$/, "", $1); print $1}')
-fi
-
-# Get the global window index of the Nth match
-target_global_idx=""
 n=0
-while IFS='|' read -r global_idx name; do
-  if [[ "$machine" == "local" ]]; then
-    skip=false
-    for p in "${prefixes[@]}"; do
-      [[ "$name" == ${p}:* ]] && skip=true && break
-    done
-    [[ "$skip" == true ]] && continue
-  else
-    [[ "$name" != ${machine}:* ]] && continue
-  fi
+while IFS='|' read -r global_idx _name; do
   n=$((n + 1))
-  if [[ "$n" -eq "$idx" ]]; then
-    target_global_idx="$global_idx"
-    break
+  if (( n == idx )); then
+    tmux select-window -t "$global_idx"
+    exit 0
   fi
-done < <(tmux list-windows -F '#{window_index}|#{window_name}' 2>/dev/null)
-
-[[ -z "$target_global_idx" ]] && exit 0
-
-tmux select-window -t "$target_global_idx" 2>/dev/null
+done < <(dev_lib::windows_for "$machine")

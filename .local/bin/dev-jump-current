@@ -1,27 +1,10 @@
 #!/usr/bin/env bash
 # dev-jump-current <per-row-idx>
-# Jumps to the Nth window in the row of the currently focused machine.
-# E.g. on AWS: dev-jump-current 3 == dev-jump aws 3.
-
 set -u
-
-CONF_FILE="$HOME/.config/dev/machines.conf"
+source ~/.local/bin/dev-lib.sh
 
 idx="${1:-}"
 [[ "$idx" =~ ^[1-9][0-9]*$ ]] || exit 0
 
-# Determine current machine from focused window name
-current_name=$(tmux display-message -p '#{window_name}' 2>/dev/null) || exit 0
-
-machine="local"
-if [[ -f "$CONF_FILE" ]]; then
-  while IFS= read -r p; do
-    [[ -z "$p" ]] && continue
-    if [[ "$current_name" == "${p}:"* ]]; then
-      machine="$p"
-      break
-    fi
-  done < <(grep -v '^#' "$CONF_FILE" | grep -v '^$' | awk -F'|' '{gsub(/^[ \t]+|[ \t]+$/, "", $1); print $1}')
-fi
-
+machine=$(dev_lib::active_machine)
 exec ~/.local/bin/dev-jump "$machine" "$idx"
