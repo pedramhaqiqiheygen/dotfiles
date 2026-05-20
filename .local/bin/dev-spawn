@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# dev-spawn current|<machine>
+# Spawns a fresh window for the given machine (or current machine).
+# For local: opens a fresh tmux window in $HOME with @dev_machine=local.
+# For remote: delegates to `dev <machine> <auto-named-session>`.
+
+set -u
+source ~/.local/bin/dev-lib.sh
+
+target="${1:-current}"
+if [[ "$target" == "current" ]]; then
+  target=$(dev_lib::active_machine)
+fi
+
+if [[ "$target" == "local" ]]; then
+  tmux new-window -c "$HOME"
+  tmux set-window-option -t : @dev_machine local
+  tmux set-window-option -t : @dev_session "home"
+  exit 0
+fi
+
+# Pick next free session name: <machine>-N
+existing_sessions=$(dev_lib::windows_for "$target" | cut -d'|' -f2 | sort)
+n=1
+while echo "$existing_sessions" | grep -qx "${target}-${n}"; do
+  n=$((n + 1))
+done
+session="${target}-${n}"
+
+exec ~/.local/bin/dev "$target" "$session"
