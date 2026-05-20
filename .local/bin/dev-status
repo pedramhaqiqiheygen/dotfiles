@@ -162,6 +162,28 @@ bar() {
   fi
 }
 
+# Back-compat: legacy `dev-status <machine>` rendered ONLY the tab list
+# (v1 status-format had bullet+label as literals). Don't fall through to row()
+# or the bullet+label will double up while the v1 status conf is still active.
+tabs_only() {
+  local m="$1"
+  local current_idx
+  current_idx=$(tmux display-message -p '#{window_index}' 2>/dev/null)
+  local n=0
+  while IFS='|' read -r gidx name; do
+    n=$((n + 1))
+    local truncated
+    truncated=$(dev_lib::truncate "$name" 22)
+    if [[ "$gidx" == "$current_idx" ]]; then
+      printf '  #[range=user|%s]#[fg=%s]%d#[default] #[fg=%s,bold]%s#[default]#[norange]' \
+        "$gidx" "$FG_NUM" "$n" "$ACCENT" "$truncated"
+    else
+      printf '  #[range=user|%s]#[fg=%s]%d#[default] #[fg=%s]%s#[default]#[norange]' \
+        "$gidx" "$FG_NUM" "$n" "$FG_DIM" "$truncated"
+    fi
+  done < <(dev_lib::windows_for "$m")
+}
+
 # Back-compat: keep status-bullet so v1 tmux-status.conf doesn't crash during transition.
 status_bullet() {
   local m="$1"
@@ -180,6 +202,6 @@ case "${1:-bar}" in
   row)            row "${2:-local}" ;;
   pill)           pill "${2:-local}" ;;
   status-bullet)  status_bullet "${2:-local}" ;;
-  *)              # Legacy: dev-status <machine> → row <machine>
-                  row "$1" ;;
+  *)              # Legacy v1: dev-status <machine> emitted only tab list
+                  tabs_only "$1" ;;
 esac
