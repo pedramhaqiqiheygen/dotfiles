@@ -171,15 +171,29 @@ tabs_only() {
   active_m=$(dev_lib::active_machine)
   local current_idx
   current_idx=$(tmux display-message -p '#{window_index}' 2>/dev/null)
+
+  # Build idx -> activity-flag map (single tmux call, lookup per tab).
+  declare -A activity_map
+  while IFS='|' read -r idx flag; do
+    activity_map[$idx]="$flag"
+  done < <(tmux list-windows -a -F '#{window_index}|#{window_activity_flag}' 2>/dev/null)
+
   local n=0
   while IFS='|' read -r gidx name; do
     n=$((n + 1))
     local truncated
     truncated=$(dev_lib::truncate "$name" 22)
+    local activity="${activity_map[$gidx]:-0}"
     if [[ "$gidx" == "$current_idx" ]]; then
+      # Active: accent + bold
       printf '  #[range=user|%s]#[fg=%s]%d#[default] #[fg=%s,bold]%s#[default]#[norange]' \
         "$gidx" "$FG_NUM" "$n" "$ACCENT" "$truncated"
+    elif [[ "$activity" == "1" ]]; then
+      # Unread (activity since last view): bright fg, no bold
+      printf '  #[range=user|%s]#[fg=%s,bold]%d#[default] #[fg=%s]%s#[default]#[norange]' \
+        "$gidx" "$ACCENT" "$n" "$FG" "$truncated"
     else
+      # Read inactive: dim
       printf '  #[range=user|%s]#[fg=%s]%d#[default] #[fg=%s]%s#[default]#[norange]' \
         "$gidx" "$FG_NUM" "$n" "$FG_DIM" "$truncated"
     fi
