@@ -700,11 +700,11 @@ sessions() {
   fi
 
   # Format: machine | session | windows | state | created (human-readable)
-  local pick
-  pick=$(awk -F'\t' '{
+  local pick now
+  now=$(date +%s)
+  pick=$(awk -F'\t' -v now="$now" '{
     split($2, parts, "|")
     name=parts[1]; wins=parts[2]; state=parts[3]; created=parts[4]
-    now=systime()
     age=now-created
     if      (age < 60)     { ago=age "s" }
     else if (age < 3600)   { ago=int(age/60) "m" }
