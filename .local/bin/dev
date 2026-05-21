@@ -694,6 +694,21 @@ sessions() {
     [[ -s "$f" ]] && cat "$f" >> "$all"
   done
 
+  # Append HOME windows (local tmux windows tagged @dev_machine=local).
+  # Each row: "local\t<window_name>|<panes>|<state>|<created>".
+  # We don't have window creation time, so use current time as a placeholder
+  # (renders as "0s ago" — fine, indicates "always there").
+  if [[ -z "$only" || "$only" == "local" ]]; then
+    local now_ts
+    now_ts=$(date +%s)
+    tmux list-windows -a -F '#{window_id}|#{window_name}|#{?window_active,active,other}|#{@dev_machine}' 2>/dev/null \
+      | awk -F'|' -v now="$now_ts" '
+          ($4 == "local" || $4 == "") {
+            # Map: name|panes(always 1 — one tab unit)|state|created
+            printf "local\t%s|1|%s|%d\n", $2, $3, now
+          }' >> "$all"
+  fi
+
   if [[ ! -s "$all" ]]; then
     echo "No remote sessions found." >&2
     return 0
@@ -702,21 +717,11 @@ sessions() {
   # Format: machine | session | windows | state | created (human-readable)
   local pick now
   now=$(date +%s)
-  # Collect machines into an array for tab navigation (Left/Right cycling).
-  local -a all_machines=()
-  while IFS= read -r m; do all_machines+=("$m"); done < <(dev_lib::machines)
-
-  # Build header showing the tabs with hotkeys.
-  local header_tabs="all"
-  local tab_binds=()
-  if (( ${#all_machines[@]} >= 1 )); then
-    local left_m="${all_machines[0]}"
-    local right_m="${all_machines[1]:-${all_machines[0]}}"
-    header_tabs="← $left_m   |   $right_m →   |   ⌫ all"
-    tab_binds+=(--bind "left:change-query($left_m)+change-prompt($left_m › )")
-    tab_binds+=(--bind "right:change-query($right_m)+change-prompt($right_m › )")
-    tab_binds+=(--bind "bspace:clear-query+change-prompt(all › )")
-  fi
+  # Build header showing the tab order. Left/Right cycle dynamically via the
+  # dev-sessions-cycle helper. Cycle: all -> <machines> -> local -> all.
+  local tabs_label="all"
+  while IFS= read -r m; do tabs_label="$tabs_label  ›  $m"; done < <(dev_lib::machines)
+  tabs_label="$tabs_label  ›  local"
 
   # Sort rows by machine so all sessions for a machine are visually grouped.
   pick=$(awk -F'\t' -v now="$now" '{
@@ -730,15 +735,29 @@ sessions() {
     printf "%-8s  %-36s  %3sw  %-8s  %s ago\n", $1, name, wins, state, ago
   }' "$all" | sort \
     | fzf --prompt "all › " --height 50% --reverse --no-mouse \
-          --header "$header_tabs"$'\n'"machine  session                               windows  state    age" \
-          --header-lines 0 \
-          "${tab_binds[@]}")
+          --header "← →  $tabs_label"$'\n'"machine  session                               windows  state    age" \
+          --bind "right:transform-query(~/.local/bin/dev-sessions-cycle +1 {q})+transform-prompt(echo \"\$(~/.local/bin/dev-sessions-cycle +1 {q} | sed 's/^$/all/')  › \")" \
+          --bind "left:transform-query(~/.local/bin/dev-sessions-cycle -1 {q})+transform-prompt(echo \"\$(~/.local/bin/dev-sessions-cycle -1 {q} | sed 's/^$/all/')  › \")")
 
   [[ -z "$pick" ]] && return 0
 
   local machine session
   machine=$(echo "$pick" | awk '{print $1}')
   session=$(echo "$pick" | awk '{print $2}')
+
+  if [[ "$machine" == "local" ]]; then
+    # HOME window: find by name (filtering to @dev_machine=local) and select it.
+    local wid
+    wid=$(tmux list-windows -a -F '#{window_id}|#{window_name}|#{@dev_machine}' 2>/dev/null \
+      | awk -F'|' -v n="$session" '($3=="local"||$3=="") && $2==n {print $1; exit}')
+    if [[ -n "$wid" ]]; then
+      tmux select-window -t "$wid"
+    else
+      echo "HOME window '$session' not found." >&2
+      return 1
+    fi
+    return 0
+  fi
 
   echo "Resuming $machine:$session..."
   exec ~/.local/bin/dev "$machine" --session "$session"
