@@ -653,6 +653,78 @@ connect() {
   fi
 }
 
+# Browse remote tmux sessions across all configured machines.
+# Picks one with fzf and attaches via `dev <machine> --session <name>`.
+# Usage:
+#   dev sessions          # all machines
+#   dev sessions <m>      # one machine only
+sessions() {
+  source ~/.local/bin/dev-lib.sh
+  local only="${1:-}"
+
+  if ! command -v fzf >/dev/null 2>&1; then
+    echo "fzf not installed. brew install fzf." >&2
+    return 1
+  fi
+
+  local tmpdir
+  tmpdir=$(mktemp -d -t dev-sessions.XXXXXX) || return 1
+  # ${tmpdir:-} guards against `set -u` after the local goes out of scope.
+  trap 'rm -rf "${tmpdir:-}"' EXIT INT TERM
+
+  # Parallel ssh to each machine, ConnectTimeout caps slow hosts.
+  while IFS= read -r m; do
+    [[ -n "$only" && "$m" != "$only" ]] && continue
+    local host
+    host=$(dev_lib::machine_host "$m")
+    [[ -z "$host" ]] && continue
+    (
+      ssh -o ConnectTimeout=5 -o BatchMode=yes "$host" \
+        'tmux list-sessions -F "#{session_name}|#{session_windows}|#{?session_attached,attached,detached}|#{session_created}" 2>/dev/null' \
+        | awk -F'|' -v m="$m" 'NF{print m "\t" $0}' > "$tmpdir/$m" 2>/dev/null
+    ) &
+  done < <(dev_lib::machines)
+  wait
+
+  # Aggregate into a single list
+  local all="$tmpdir/all"
+  : > "$all"
+  for f in "$tmpdir"/*; do
+    [[ "$(basename "$f")" == "all" ]] && continue
+    [[ -s "$f" ]] && cat "$f" >> "$all"
+  done
+
+  if [[ ! -s "$all" ]]; then
+    echo "No remote sessions found." >&2
+    return 0
+  fi
+
+  # Format: machine | session | windows | state | created (human-readable)
+  local pick
+  pick=$(awk -F'\t' '{
+    split($2, parts, "|")
+    name=parts[1]; wins=parts[2]; state=parts[3]; created=parts[4]
+    now=systime()
+    age=now-created
+    if      (age < 60)     { ago=age "s" }
+    else if (age < 3600)   { ago=int(age/60) "m" }
+    else if (age < 86400)  { ago=int(age/3600) "h" }
+    else                   { ago=int(age/86400) "d" }
+    printf "%-8s  %-36s  %3sw  %-8s  %s ago\n", $1, name, wins, state, ago
+  }' "$all" \
+    | fzf --prompt "resume › " --height 50% --reverse --no-mouse \
+          --header "machine  session                               windows  state    age")
+
+  [[ -z "$pick" ]] && return 0
+
+  local machine session
+  machine=$(echo "$pick" | awk '{print $1}')
+  session=$(echo "$pick" | awk '{print $2}')
+
+  echo "Resuming $machine:$session..."
+  exec ~/.local/bin/dev "$machine" --session "$session"
+}
+
 # Walk every tmux window, sniff its running command, and set
 # @dev_machine / @dev_session accordingly. Idempotent.
 migrate() {
@@ -718,6 +790,11 @@ main() {
       setup) setup; exit 0 ;;
       migrate)
         migrate
+        exit 0
+        ;;
+      sessions|ls)
+        shift
+        sessions "$@"
         exit 0
         ;;
     esac
