@@ -702,6 +702,23 @@ sessions() {
   # Format: machine | session | windows | state | created (human-readable)
   local pick now
   now=$(date +%s)
+  # Collect machines into an array for tab navigation (Left/Right cycling).
+  local -a all_machines=()
+  while IFS= read -r m; do all_machines+=("$m"); done < <(dev_lib::machines)
+
+  # Build header showing the tabs with hotkeys.
+  local header_tabs="all"
+  local tab_binds=()
+  if (( ${#all_machines[@]} >= 1 )); then
+    local left_m="${all_machines[0]}"
+    local right_m="${all_machines[1]:-${all_machines[0]}}"
+    header_tabs="← $left_m   |   $right_m →   |   ⌫ all"
+    tab_binds+=(--bind "left:change-query($left_m)+change-prompt($left_m › )")
+    tab_binds+=(--bind "right:change-query($right_m)+change-prompt($right_m › )")
+    tab_binds+=(--bind "bspace:clear-query+change-prompt(all › )")
+  fi
+
+  # Sort rows by machine so all sessions for a machine are visually grouped.
   pick=$(awk -F'\t' -v now="$now" '{
     split($2, parts, "|")
     name=parts[1]; wins=parts[2]; state=parts[3]; created=parts[4]
@@ -711,9 +728,11 @@ sessions() {
     else if (age < 86400)  { ago=int(age/3600) "h" }
     else                   { ago=int(age/86400) "d" }
     printf "%-8s  %-36s  %3sw  %-8s  %s ago\n", $1, name, wins, state, ago
-  }' "$all" \
-    | fzf --prompt "resume › " --height 50% --reverse --no-mouse \
-          --header "machine  session                               windows  state    age")
+  }' "$all" | sort \
+    | fzf --prompt "all › " --height 50% --reverse --no-mouse \
+          --header "$header_tabs"$'\n'"machine  session                               windows  state    age" \
+          --header-lines 0 \
+          "${tab_binds[@]}")
 
   [[ -z "$pick" ]] && return 0
 
