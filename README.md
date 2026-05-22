@@ -24,84 +24,16 @@ dotfiles push
 
 ## Terminal Command Center
 
-A tmux-based workflow for managing remote dev machines from your local terminal. Provides a 3-line status bar showing SSH sessions grouped by machine with health indicators, Nerd Font icons, and a dotbar-inspired theme.
+A tmux-based, dotbar-themed multi-machine workflow: per-machine status rows, clickable tabs, fzf session resume across all your remotes, sleep-resilient SSH, OSC 52 clipboard. One row per machine in the status bar; `C-a R` to bring back any past session; `+` to spawn a fresh one.
 
-### Quick Start
+**Full docs:** [`docs/dotfiles/terminal-command-center.md`](docs/dotfiles/terminal-command-center.md) — features, requirements, key-bindings cheat sheet, `machines.conf` schema, customization, troubleshooting.
 
 ```bash
 ./bootstrap-macos.sh    # Install tmux, fzf, nerd fonts, TPM
 dev setup               # Auto-detect SSH hosts, configure machines
 ```
 
-Set your terminal font to **JetBrainsMono Nerd Font**, then open a new terminal. The tmux command center starts automatically.
-
-### The `dev` Command
-
-```bash
-dev                          # fzf pick a machine
-dev <machine>                # SSH + attach remote tmux session
-dev <machine> <repo>         # SSH + cd to ~/workspace/<repo>
-dev <machine> <repo> --claude    # SSH + repo + start claude code
-dev <machine> <repo> --wt <branch>  # SSH + repo + worktree + claude
-dev <machine> --list         # List remote tmux sessions
-dev <machine> --repos        # List repos on machine
-dev <machine> --kill <name>  # Kill a remote tmux session
-dev <machine> --session <n>  # Attach to specific remote tmux session
-dev setup                    # Configure machines from SSH hosts
-```
-
-### Machine Configuration
-
-Machines are configured in `~/.config/dev/machines.conf`:
-
-```
-# name|ssh_host|workspace|icon|color|show_on_status|key
-gpu|nebius|~/workspace|icon|#a6e3a1|true|g
-aws|devbox|~/workspaces|icon|#7aa2f7|true|d
-```
-
-The `key` field defines the quick-access letter for each machine:
-- **Tmux keybinding:** `C-a <key>` opens an SSH window to that machine
-- **Shell aliases:** `d<key>` connects, `d<key>c` starts Claude, `d<key>l` lists sessions, `d<key>r` lists repos
-
-Run `dev setup` to auto-detect SSH hosts from `~/.ssh/config` and interactively configure them. All keybindings, aliases, and status lines regenerate automatically.
-
-### Nested tmux
-
-Local tmux uses `C-a` as prefix, remote uses `C-b`. They don't collide:
-
-- `C-a <key>` always controls your local tmux
-- `C-b <key>` passes through to the remote tmux
-- `C-a a` sends `C-b` to the nested remote tmux
-
-### Status Bar
-
-One line per machine + local, powered by a dotbar-inspired theme:
-
-- Health dot (green/red) per machine — async SSH probe, never blocks
-- Nerd Font icons for each machine type
-- Dot-separated window names, active window highlighted
-- Prefix indicator flashes when `C-a` is pressed
-- Pane count shown when splits are active
-
-### File Layout
-
-```
-.config/tmux/
-  theme.conf          # Dotbar color palette + icon definitions
-  tmux.shared.conf    # Common settings (mouse, vim-nav, splits, vi keys)
-  tmux.conf           # Remote config (C-b prefix, hostname status bar)
-  tmux.local.conf     # Local config (C-a prefix, command center)
-
-.config/dev/
-  machines.conf       # Machine registry (edit or use `dev setup`)
-  tmux-status.conf    # Auto-generated status lines + keybindings
-  aliases.sh          # Auto-generated shell aliases
-
-.local/bin/
-  dev                 # Dev command
-  dev-status          # Status line helper
-```
+Set your terminal font to **JetBrainsMono Nerd Font**, open a new terminal — the command center is live.
 
 ## Git Worktree Helpers
 

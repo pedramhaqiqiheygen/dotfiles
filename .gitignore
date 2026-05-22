@@ -22,6 +22,11 @@
 !.ssh/
 !.ssh/config
 
+# Shareable dotfiles docs (docs/specs/ and docs/plans/ stay private).
+!docs/
+!docs/dotfiles/
+!docs/dotfiles/**
+
 # Sensitive - never track
 .config/gh/
 **/hosts.json
