@@ -360,7 +360,9 @@ setup() {
 # Hardcoded theme colors (tmux variable expansion is unreliable)
 _BG="#0B0E14"
 _FG_DIM="#475266"
+_FG_SEP="#2a313d"
 _FG_ACCENT="#95E6CB"
+_ACCENT_BG="#1a2433"
 _FG_DOT="#333842"
 _HEALTH_OK="#a6e3a1"
 _LOCAL_COLOR="#e0af68"
@@ -376,6 +378,8 @@ _generate_tmux_status() {
   local count=${#status_machines[@]}
 
   # --- tmux-status.conf (status lines + keybindings) ---
+  # v2 layout: one row per machine + HOME (local). Bindings use the new
+  # @dev_machine routing (set by Task 2 connect() and Task 3 dev migrate).
   {
     echo "# Auto-generated — do not edit manually"
     echo "# Regenerate with: dev setup"
@@ -392,25 +396,26 @@ _generate_tmux_status() {
       label=$(echo "$machine" | tr '[:lower:]' '[:upper:]')
 
       echo "# $label"
-      echo "set -g status-format[$i] \"#[bg=${_BG}] #(~/.local/bin/dev-status status-bullet $machine) #[fg=${color}]${icon} ${label}#[default]#[bg=${_BG}]  #(~/.local/bin/dev-status $machine)#[align=right]#{?#{&&:#{@remote_prefix},#{m:${machine}:*,#{window_name}}},#[fg=${_FG_ACCENT}] C-b #[default],} \""
+      # Active-machine check via @dev_machine instead of window-name globbing.
+      # Prefix chip is rendered with accent bg for the dotbar look.
+      echo "set -g status-format[$i] \"#[bg=${_BG}] #(~/.local/bin/dev-status status-bullet $machine) #[fg=${color}]${icon} ${label}#[default] #[fg=${_FG_SEP}]│#[default]#(~/.local/bin/dev-status $machine)#[align=right]#{?#{&&:#{@remote_prefix},#{==:${machine},#{@dev_machine}}},#[bg=${_ACCENT_BG}#,fg=${_FG_ACCENT}] C-b #[default],} \""
       echo ""
       i=$((i + 1))
     done
 
     # Local line (always last)
     echo "# HOME (local)"
-    echo "set -g status-format[$i] \"#[bg=${_BG}] #(~/.local/bin/dev-status status-bullet local) #[fg=${_LOCAL_COLOR}]󰆍 HOME#[default]#[bg=${_BG}]  #(~/.local/bin/dev-status local)#[align=right]#{?client_prefix,#[fg=${_FG_ACCENT}] C-a #[default],}#[fg=${_FG_DIM}]%H:%M #[fg=${_FG_DOT}]%a %-d %b \""
+    echo "set -g status-format[$i] \"#[bg=${_BG}] #(~/.local/bin/dev-status status-bullet local) #[fg=${_LOCAL_COLOR}]󰆍 HOME#[default] #[fg=${_FG_SEP}]│#[default]#(~/.local/bin/dev-status local)#[align=right]#{?client_prefix,#[bg=${_ACCENT_BG}#,fg=${_FG_ACCENT}] C-a #[default],}#[fg=${_FG_DIM}]%H:%M \""
     echo ""
 
-    # Per-row jump within the CURRENT machine row: C-a 1..9 = nth tab of focused machine
-    echo "# Per-row jump within the CURRENT machine row: C-a 1..9 = nth tab of focused machine"
+    echo "# Per-row digit jump: C-a 1..9 = Nth tab of focused machine row"
     local d
     for d in 1 2 3 4 5 6 7 8 9; do
       echo "bind ${d} run-shell \"~/.local/bin/dev-jump-current ${d}\""
     done
     echo ""
-    # Launchers (uppercase): C-a G / C-a A → dev gpu / dev aws (main session)
-    echo "# Launch dev <machine> for the \"main\" remote session: C-a <UPPER>"
+
+    echo "# Launchers: C-a <UPPER> = open default session on that machine"
     for machine in "${all_machines[@]}"; do
       local key
       key=$(_get_field "$machine" 7)
@@ -421,28 +426,44 @@ _generate_tmux_status() {
       fi
     done
     echo ""
-    # Silent key tables (no command-prompt, no yellow flash) for cross-row jumps.
-    echo "# Cross-row jump via silent key tables (no command-prompt flash):"
-    echo "# C-a g 4 = 4th gpu, C-a a 2 = 2nd aws, C-a h 1 = 1st home"
+
+    echo "# Spawn fresh tab on the focused machine"
+    echo "bind N run-shell \"~/.local/bin/dev-spawn current\""
+    echo ""
+
+    echo "# Resume past tmux sessions via fzf popup (cross-machine + HOME)"
+    echo "bind R display-popup -E -w 70% -h 60% \"~/.local/bin/dev sessions\""
+    echo ""
+
+    echo "# Cross-row jump via single leader (no collisions with split bindings)"
+    echo "# C-a j g 3 = 3rd gpu tab, C-a j a 2 = 2nd aws, C-a j l 1 = 1st HOME"
+    echo "bind j switch-client -T jump"
     for machine in "${all_machines[@]}"; do
       local key
       key=$(_get_field "$machine" 7)
       [[ -z "$key" ]] && continue
-      echo "bind ${key} switch-client -T jump_${machine}"
+      echo "bind -T jump ${key} switch-client -T jump_${machine}"
+    done
+    echo "bind -T jump l switch-client -T jump_local"
+    echo "bind -T jump Any switch-client -T root"
+    echo ""
+
+    for machine in "${all_machines[@]}"; do
       for d in 1 2 3 4 5 6 7 8 9; do
         echo "bind -T jump_${machine} ${d} run-shell \"~/.local/bin/dev-jump ${machine} ${d}\""
       done
+      echo "bind -T jump_${machine} N run-shell \"~/.local/bin/dev-spawn ${machine}\""
       echo "bind -T jump_${machine} Any switch-client -T root"
+      echo ""
     done
-    # Home jump table
-    echo "bind h switch-client -T jump_home"
     for d in 1 2 3 4 5 6 7 8 9; do
-      echo "bind -T jump_home ${d} run-shell \"~/.local/bin/dev-jump local ${d}\""
+      echo "bind -T jump_local ${d} run-shell \"~/.local/bin/dev-jump local ${d}\""
     done
-    echo "bind -T jump_home Any switch-client -T root"
+    echo "bind -T jump_local N run-shell \"~/.local/bin/dev-spawn local\""
+    echo "bind -T jump_local Any switch-client -T root"
     echo ""
-    echo "# Keyboard preview: C-a p <digit> peeks at Nth tab in current row (silent table)."
-    echo "# Cross-row preview: C-a B (existing) opens fzf gallery with all windows + previews."
+
+    echo "# Keyboard preview leader: C-a p <digit> peeks at Nth tab in current row"
     echo "bind p switch-client -T preview_current"
     for d in 1 2 3 4 5 6 7 8 9; do
       echo "bind -T preview_current ${d} run-shell \"~/.local/bin/dev-preview ${d}\""
