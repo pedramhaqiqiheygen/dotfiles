@@ -18,9 +18,11 @@
 !.config/tmux/**
 !.config/starship.toml
 
-# SSH config (keys protected by *.pem / *.key rules below)
+# SSH config — tracked as a TEMPLATE (real ~/.ssh/config stays untracked).
+# Copy ~/.ssh/config.example to ~/.ssh/config on a new machine and fill in
+# real HostName / User / IdentityFile values. (Keys protected by *.pem / *.key.)
 !.ssh/
-!.ssh/config
+!.ssh/config.example
 
 # Shareable dotfiles docs (docs/specs/ and docs/plans/ stay private).
 !docs/
